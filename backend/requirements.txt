@@ -1,0 +1,9 @@
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+sqlmodel==0.0.39
+python-barcode==0.16.1
+pillow==12.3.0
+psycopg[binary]==3.3.4
+
+# Optional MySQL driver if you switch away from PostgreSQL later:
+# pymysql>=1.1

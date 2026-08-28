@@ -1,0 +1,1419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>服装店库存收银系统</title>
+  <script src="/static/vendor/vue.global.prod.js"></script>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --surface: #ffffff;
+      --text: #0f172a;
+      --text-soft: #64748b;
+      --text-faint: #94a3b8;
+      --border: #eceef1;
+      --border-strong: #e2e5ea;
+      --accent: #4f46e5;
+      --accent-hover: #4338ca;
+      --accent-soft: #eef2ff;
+      --danger: #dc2626;
+      --danger-hover: #b91c1c;
+      --danger-soft: #fef2f2;
+      --ok: #16a34a;
+      --warn: #d97706;
+      --warn-soft: #fff7ed;
+      --shadow-sm: 0 1px 2px rgba(15,23,42,.05);
+      --shadow-md: 0 4px 16px rgba(15,23,42,.08);
+      --shadow-lg: 0 20px 50px rgba(15,23,42,.18);
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+      font-size: 14px; -webkit-font-smoothing: antialiased;
+    }
+
+    /* ---------- 布局 ---------- */
+    .layout { display: flex; min-height: 100vh; }
+    .sidebar {
+      width: 232px; flex-shrink: 0; background: var(--surface);
+      border-right: 1px solid var(--border); padding: 22px 16px;
+      display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 22px; }
+    .brand .logo {
+      width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--accent), #7c73f0);
+      display: flex; align-items: center; justify-content: center; color: #fff;
+    }
+    .brand .title { font-size: 14px; font-weight: 650; line-height: 1.25; }
+    .brand .title small { display: block; font-weight: 400; color: var(--text-faint); font-size: 11px; margin-top: 2px; }
+    .nav { display: flex; flex-direction: column; gap: 3px; }
+    .nav-label { font-size: 11px; color: var(--text-faint); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; padding: 6px 10px; }
+    .nav button {
+      display: flex; align-items: center; gap: 11px; width: 100%; text-align: left;
+      background: transparent; border: 0; cursor: pointer; color: var(--text-soft);
+      padding: 9px 11px; border-radius: 9px; font-size: 14px; font-family: inherit;
+      transition: background .12s, color .12s;
+    }
+    .nav button:hover { background: var(--bg); color: var(--text); }
+    .nav button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+    .nav button svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .sidebar .foot { margin-top: auto; padding: 10px; color: var(--text-faint); font-size: 11px; line-height: 1.6; }
+
+    .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .topbar {
+      height: 64px; flex-shrink: 0; padding: 0 32px; display: flex; align-items: center;
+      justify-content: space-between; border-bottom: 1px solid var(--border); background: var(--surface);
+      position: sticky; top: 0; z-index: 5;
+    }
+    .topbar h1 { font-size: 17px; font-weight: 650; margin: 0; }
+    .topbar .sub { color: var(--text-faint); font-size: 12.5px; margin-top: 2px; }
+    .store-pick { position: relative; font-size: 13px; }
+    .store-trigger {
+      min-width: 216px; height: 42px; display: flex; align-items: center; gap: 9px;
+      padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 8px;
+      background: var(--bg); color: var(--text-soft); font: inherit; cursor: pointer;
+      transition: background .12s, border-color .12s, box-shadow .12s;
+    }
+    .store-trigger:hover { background: #fff; border-color: #c8cfdb; }
+    .store-trigger:focus-visible, .store-trigger.open {
+      outline: none; background: #fff; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .store-trigger:disabled { cursor: default; }
+    .store-trigger:disabled:hover { background: var(--bg); border-color: var(--border-strong); }
+    .store-icon { width: 17px; height: 17px; flex-shrink: 0; color: var(--accent); }
+    .store-label { color: var(--text-faint); white-space: nowrap; }
+    .store-value { margin-left: auto; color: var(--text); font-weight: 650; white-space: nowrap; }
+    .store-chevron { width: 16px; height: 16px; flex-shrink: 0; color: var(--text-soft); transition: transform .16s ease; }
+    .store-trigger.open .store-chevron { transform: rotate(180deg); }
+    .store-menu {
+      position: absolute; top: calc(100% + 7px); right: 0; z-index: 30; width: 100%;
+      padding: 6px; background: #fff; border: 1px solid var(--border-strong); border-radius: 8px;
+      box-shadow: 0 12px 30px rgba(31, 41, 55, .14); animation: store-menu-in .12s ease-out;
+    }
+    .store-option {
+      width: 100%; height: 39px; display: flex; align-items: center; justify-content: space-between;
+      padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text);
+      font: inherit; text-align: left; cursor: pointer; transition: background .1s, color .1s;
+    }
+    .store-option:hover, .store-option:focus-visible { outline: none; background: var(--bg); }
+    .store-option.selected { background: var(--accent-soft); color: var(--accent); font-weight: 650; }
+    .store-option-check { width: 16px; height: 16px; flex-shrink: 0; }
+    @keyframes store-menu-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+    .stat-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+    .stat { flex: 1; min-width: 150px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow-sm); }
+    .stat .k { color: var(--text-faint); font-size: 12px; font-weight: 600; }
+    .stat .v { font-size: 24px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums; }
+    .link { color: var(--accent); cursor: pointer; font-weight: 600; }
+    .link:hover { text-decoration: underline; }
+    .badge-store { background: var(--accent-soft); color: var(--accent); border: 0; }
+    main { padding: 26px 32px 40px; max-width: 1160px; width: 100%; }
+
+    /* ---------- 卡片 ---------- */
+    .card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 20px 22px; margin-bottom: 18px; box-shadow: var(--shadow-sm);
+    }
+    .card-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 16px; }
+    .card h2 { margin: 0; font-size: 14.5px; font-weight: 650; color: var(--text); }
+    .card .hint { color: var(--text-faint); font-size: 12px; }
+
+    /* ---------- 表单 ---------- */
+    .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+    .field { display: flex; flex-direction: column; }
+    label { display: block; font-size: 12px; color: var(--text-soft); margin-bottom: 6px; font-weight: 500; }
+    input, select {
+      border: 1px solid var(--border-strong); border-radius: 9px; padding: 9px 11px;
+      font-size: 14px; font-family: inherit; background: #fff; color: var(--text); min-width: 0;
+      transition: border-color .12s, box-shadow .12s;
+    }
+    input::placeholder { color: var(--text-faint); }
+    input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .check { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; color: var(--text); cursor: pointer; padding-bottom: 9px; }
+    .check input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+    /* ---------- 按钮 ---------- */
+    button.btn {
+      border: 1px solid transparent; border-radius: 9px; padding: 9px 16px; cursor: pointer;
+      font-size: 13.5px; font-weight: 550; font-family: inherit; background: var(--accent); color: #fff;
+      transition: background .12s, box-shadow .12s, border-color .12s; white-space: nowrap;
+    }
+    button.btn:hover { background: var(--accent-hover); }
+    button.btn:disabled { opacity: .5; cursor: not-allowed; }
+    button.btn.ghost { background: #fff; color: var(--text-soft); border-color: var(--border-strong); }
+    button.btn.ghost:hover { background: var(--bg); color: var(--text); }
+    button.btn.danger { background: var(--danger); }
+    button.btn.danger:hover { background: var(--danger-hover); }
+    button.btn.danger-ghost { background: #fff; color: var(--danger); border-color: #f3d2d2; }
+    button.btn.danger-ghost:hover { background: var(--danger-soft); }
+    button.btn.sm { padding: 5px 11px; font-size: 12.5px; border-radius: 8px; }
+    .actions { display: inline-flex; gap: 6px; }
+
+    /* ---------- 表格 ---------- */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+    th {
+      text-align: left; padding: 11px 12px; color: var(--text-faint); font-weight: 600;
+      font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase;
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    td { padding: 13px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tbody tr { transition: background .1s; }
+    tbody tr:hover { background: #fafbfc; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tr.low { background: var(--warn-soft); }
+    tr.low:hover { background: #fef0df; }
+    .code-cell { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; color: var(--text-soft); font-size: 12.5px; }
+    .strong { font-weight: 600; }
+    .price { font-variant-numeric: tabular-nums; }
+
+    /* ---------- 徽标 ---------- */
+    .pill { display: inline-flex; align-items: center; font-size: 11px; padding: 2px 9px; border-radius: 999px; background: var(--bg); color: var(--text-soft); font-weight: 600; border: 1px solid var(--border-strong); }
+    .pill.low { background: var(--warn-soft); color: var(--warn); border-color: #fde0bd; }
+    .pill.off { background: var(--danger-soft); color: var(--danger); border-color: #f3d2d2; }
+    tr.inactive { opacity: .62; }
+    .qty-in { width: 64px; }
+
+    /* ---------- 收银 ---------- */
+    .scan-box {
+      font-size: 20px; padding: 16px 18px; width: 100%; border: 1.5px solid var(--border-strong);
+      border-radius: 11px; transition: border-color .15s, box-shadow .15s;
+    }
+    .scan-box:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+    .checkout-bar { display: flex; justify-content: space-between; align-items: center; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+    .total-label { color: var(--text-soft); font-size: 13px; }
+    .total { font-size: 26px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; margin-left: 6px; }
+
+    .muted { color: var(--text-soft); font-size: 12.5px; }
+    .empty { text-align: center; color: var(--text-faint); padding: 44px 20px; }
+    .empty svg { width: 34px; height: 34px; opacity: .5; margin-bottom: 10px; }
+
+    /* ---------- 弹窗 ---------- */
+    .modal-mask {
+      position: fixed; inset: 0; background: rgba(15,23,42,.45); backdrop-filter: blur(3px);
+      display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px;
+      animation: fade .12s ease;
+    }
+    @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+    .modal {
+      background: #fff; border-radius: 16px; padding: 24px; min-width: 340px; max-width: 420px;
+      box-shadow: var(--shadow-lg); animation: pop .14s ease;
+    }
+    @keyframes pop { from { transform: scale(.96); opacity: .6; } to { transform: scale(1); opacity: 1; } }
+    .modal-icon {
+      width: 42px; height: 42px; border-radius: 11px; display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 14px;
+    }
+    .modal-icon.warn { background: var(--accent-soft); color: var(--accent); }
+    .modal-icon.danger { background: var(--danger-soft); color: var(--danger); }
+    .modal-title { font-size: 16.5px; font-weight: 650; text-align: center; margin-bottom: 10px; }
+    .modal-desc { color: var(--text-soft); font-size: 13.5px; line-height: 1.7; text-align: center; margin: 0 0 6px; }
+    .move-preview {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      background: var(--bg); border-radius: 10px; padding: 14px; margin: 16px 0; font-size: 20px; font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .move-preview .arrow { color: var(--text-faint); font-size: 18px; }
+    .move-preview .delta { font-size: 12.5px; font-weight: 600; color: var(--text-soft); margin-left: 4px; }
+    .modal-detail { background: var(--bg); border-radius: 10px; padding: 13px 15px; margin: 14px 0; font-size: 13px; }
+    .modal-detail div { display: flex; justify-content: space-between; padding: 3px 0; }
+    .modal-detail span:first-child { color: var(--text-faint); }
+    .modal-detail span:last-child { color: var(--text); font-weight: 500; }
+    .modal-actions { display: flex; gap: 10px; margin-top: 18px; }
+    .modal-actions .btn { flex: 1; justify-content: center; }
+    .barcode-stage { text-align: center; }
+    .barcode-stage img { max-width: 100%; background: #fff; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+
+    /* ---------- 登录页 ---------- */
+    .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #eef2ff 0%, var(--bg) 55%); padding: 20px; }
+    .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-md); padding: 34px 32px; width: 340px; }
+    .login-logo { width: 52px; height: 52px; border-radius: 13px; background: linear-gradient(135deg, var(--accent), #7c73f0); color: #fff; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; }
+    .login-card h1 { font-size: 18px; font-weight: 650; text-align: center; margin: 0 0 4px; }
+    .login-sub { color: var(--text-faint); font-size: 13px; text-align: center; margin: 0 0 22px; }
+    .login-card label { margin-top: 12px; }
+    .login-card input { width: 100%; }
+    .login-err { color: var(--danger); font-size: 12.5px; margin-top: 12px; }
+    .login-btn { width: 100%; margin-top: 20px; justify-content: center; padding: 11px; font-size: 15px; }
+    .user-chip { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--text-soft); }
+    .user-chip .who { font-weight: 600; color: var(--text); }
+    .role-tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+    .role-tag.staff { background: var(--bg); color: var(--text-soft); border: 1px solid var(--border-strong); }
+    .topbar-right { display: flex; align-items: center; gap: 16px; }
+    .status-tag { font-size: 11px; padding: 2px 9px; border-radius: 999px; font-weight: 600; }
+    .status-tag.paid { background: #ecfdf3; color: var(--ok); }
+    .status-tag.partial_refunded { background: var(--warn-soft); color: var(--warn); }
+    .status-tag.refunded { background: var(--danger-soft); color: var(--danger); }
+    .status-tag.shipped, .status-tag.partial, .status-tag.draft { background: var(--warn-soft); color: var(--warn); }
+    .status-tag.received, .status-tag.completed { background: var(--ok-soft); color: var(--ok); }
+    .status-tag.cancelled { background: var(--danger-soft); color: var(--danger); }
+
+    .toast {
+      position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%); z-index: 80;
+      background: var(--text); color: #fff; padding: 11px 20px; border-radius: 10px;
+      box-shadow: var(--shadow-md); font-size: 13.5px; animation: pop .14s ease;
+    }
+
+    @media (max-width: 760px) {
+      .layout { flex-direction: column; }
+      .sidebar { width: 100%; height: auto; position: static; flex-direction: row; align-items: center; padding: 12px 16px; overflow-x: auto; }
+      .brand { padding: 0 16px 0 4px; }
+      .nav { flex-direction: row; }
+      .nav-label, .sidebar .foot { display: none; }
+      .topbar { padding: 0 18px; }
+      .topbar-right { gap: 8px; }
+      .store-trigger { min-width: 126px; }
+      .store-label { display: none; }
+      .user-chip .who { display: none; }
+      main { padding: 18px; }
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- ============ 登录页 ============ -->
+  <div class="login-wrap" v-if="!me">
+    <div class="login-card">
+      <div class="login-logo">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/></svg>
+      </div>
+      <h1>服装店库存收银系统</h1>
+      <p class="login-sub">请登录后使用</p>
+      <label>用户名</label>
+      <input v-model="loginForm.username" @keyup.enter="login" placeholder="用户名" autofocus />
+      <label>密码</label>
+      <input v-model="loginForm.password" @keyup.enter="login" type="password" placeholder="密码" />
+      <div class="login-err" v-if="loginError">{{ loginError }}</div>
+      <button class="btn login-btn" @click="login" :disabled="loggingIn">{{ loggingIn ? '登录中…' : '登 录' }}</button>
+    </div>
+  </div>
+
+  <div class="layout" v-if="me">
+    <!-- ============ 侧边栏 ============ -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/></svg>
+        </div>
+        <div class="title">服装店系统<small>库存 · 条码 · 收银</small></div>
+      </div>
+      <div class="nav-label">主菜单</div>
+      <nav class="nav">
+        <button :class="{active: tab==='stock'}" @click="goStock">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>
+          库存查询
+        </button>
+        <button v-if="isManager" :class="{active: tab==='product'}" @click="goProduct">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5"/></svg>
+          商品录入
+        </button>
+        <button :class="{active: tab==='pos'}" @click="goPos">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/></svg>
+          收银
+        </button>
+        <button :class="{active: tab==='orders'}" @click="goOrders">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6M9 9h1"/></svg>
+          账单流水
+        </button>
+        <button v-if="isManager" :class="{active: tab==='users'}" @click="goUsers">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          账号管理
+        </button>
+      </nav>
+      <div class="foot">本地 / 局域网版<br>多终端共用同一份数据</div>
+    </aside>
+
+    <!-- ============ 内容区 ============ -->
+    <div class="content">
+      <div class="topbar">
+        <div>
+          <h1>{{ pageTitle }}</h1>
+          <div class="sub">{{ pageSub }}</div>
+        </div>
+        <div class="topbar-right">
+          <div class="store-pick" ref="storePicker">
+            <button
+              ref="storeTrigger"
+              type="button"
+              class="store-trigger"
+              :class="{ open: storeMenuOpen }"
+              :disabled="!isManager"
+              :title="isManager ? '切换当前门店' : '店员账号固定所属门店'"
+              aria-haspopup="listbox"
+              :aria-expanded="storeMenuOpen"
+              @click="toggleStoreMenu"
+              @keydown.down.prevent="openStoreMenu"
+              @keydown.up.prevent="openStoreMenu"
+              @keydown.esc.prevent="closeStoreMenu"
+            >
+              <svg class="store-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9 5 3h14l2 6M4 9v11a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9M3 9h18"/></svg>
+              <span class="store-label">当前门店</span>
+              <span class="store-value">{{ currentStore }}</span>
+              <svg v-if="isManager" class="store-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div v-if="storeMenuOpen" class="store-menu" role="listbox" aria-label="选择当前门店">
+              <button
+                v-for="(s, index) in stores"
+                :key="s"
+                type="button"
+                class="store-option"
+                :class="{ selected: s === currentStore }"
+                role="option"
+                :aria-selected="s === currentStore"
+                @click="selectCurrentStore(s)"
+                @keydown.down.prevent="moveStoreOption(1)"
+                @keydown.up.prevent="moveStoreOption(-1)"
+                @keydown.home.prevent="focusStoreOptionAt(0)"
+                @keydown.end.prevent="focusStoreOptionAt(stores.length - 1)"
+                @keydown.enter.prevent="selectCurrentStore(s)"
+                @keydown.space.prevent="selectCurrentStore(s)"
+                @keydown.esc.prevent="closeStoreMenu(true)"
+                @keydown.tab="closeStoreMenu"
+              >
+                <span>{{ s }}</span>
+                <svg v-if="s === currentStore" class="store-option-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4L19 6"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="user-chip" v-if="me">
+            <span class="who">{{ me.name || me.username }}</span>
+            <span class="role-tag" :class="me.role">{{ me.role==='manager' ? '店长' : '店员' }}</span>
+            <button class="btn ghost sm" @click="logout">登出</button>
+          </div>
+        </div>
+      </div>
+
+      <main>
+        <!-- ============ 库存查询 ============ -->
+        <template v-if="tab==='stock'">
+          <div class="card">
+            <div class="row">
+              <div class="field" style="flex:1;min-width:240px">
+                <label>关键词（款名 / 款号 / 条码）</label>
+                <input v-model="stockKeyword" @keyup.enter="loadStock" placeholder="输入后回车搜索" />
+              </div>
+              <div class="field" style="width:150px">
+                <label>查看门店</label>
+                <select v-model="stockStore" @change="loadStock">
+                  <option v-for="s in stores" :key="s" :value="s">{{ s }}</option>
+                  <option v-if="isManager" value="all">全部汇总</option>
+                </select>
+              </div>
+              <label class="check"><input type="checkbox" v-model="lowOnly" @change="loadStock" /> 仅看低库存</label>
+              <label class="check" v-if="isManager"><input type="checkbox" v-model="includeInactive" @change="loadStock" /> 含停用</label>
+              <button class="btn" @click="loadStock">查询</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>库存明细</h2><span class="hint" v-if="skus.length">共 {{ skus.length }} 个 SKU</span></div>
+            <div class="table-wrap" v-if="skus.length">
+              <table>
+                <thead><tr><th>款式</th><th>颜色 / 尺码</th><th>条码</th><th>售价</th><th>库存</th><th style="text-align:right">操作</th></tr></thead>
+                <tbody>
+                  <tr v-for="s in skus" :key="s.id" :class="{low: s.low_stock, inactive: !s.active}">
+                    <td><div class="strong">{{ s.product_name }} <span v-if="!s.active" class="pill off">已停用</span></div><div class="code-cell">{{ s.product_code }}</div></td>
+                    <td>{{ s.color || '-' }} / {{ s.size || '-' }}</td>
+                    <td class="code-cell">{{ s.barcode }}</td>
+                    <td class="price">¥{{ s.price }}</td>
+                    <td><span class="strong">{{ s.quantity }}</span> <span v-if="s.low_stock" class="pill low">低库存</span></td>
+                    <td style="text-align:right">
+                      <div class="actions" style="justify-content:flex-end">
+                        <template v-if="isManager">
+                          <input class="qty-in" type="number" min="1" v-model.number="s._qty" placeholder="数量" />
+                          <button class="btn sm" @click="askMove(s,'in')">入库</button>
+                          <button class="btn sm ghost" @click="askMove(s,'out')">出库</button>
+                        </template>
+                        <button v-if="isManager" class="btn sm ghost" @click="addTransferItem(s)">加入调拨</button>
+                        <button class="btn sm ghost" @click="showBarcode(s)">条码</button>
+                        <button v-if="isManager" class="btn sm ghost" @click="toggleSkuActive(s)">{{ s.active ? '下架' : '启用' }}</button>
+                        <button v-if="isManager" class="btn sm danger-ghost" @click="delSku(s)">删</button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else class="empty">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>
+              <div>暂无数据，去「商品录入」添加款式吧。</div>
+            </div>
+          </div>
+          <div v-if="isManager" class="card">
+            <div class="card-head"><h2>新建批量调拨</h2><span class="hint">发货后进入在途，逐项确认收货后才计入调入门店库存</span></div>
+            <div class="row">
+              <div class="field"><label>调出门店</label><input :value="stockStore==='all' ? '请先选择具体门店' : stockStore" disabled style="width:150px" /></div>
+              <div class="field"><label>调入门店</label><select v-model="transferTarget" style="width:150px"><option v-for="s in transferTargetsForDraft" :key="s" :value="s">{{ s }}</option></select></div>
+              <div class="field" style="flex:1;min-width:180px"><label>备注</label><input v-model="transferNote" placeholder="如：补货、调货原因" /></div>
+              <button class="btn danger" @click="createTransferBatch" :disabled="!transferDraft.length || transferSubmitting">{{ transferSubmitting ? '发货中...' : '确认发货' }}</button>
+            </div>
+            <div class="table-wrap" v-if="transferDraft.length" style="margin-top:14px">
+              <table><thead><tr><th>商品</th><th>规格</th><th>可调数量</th><th>本次调拨</th><th style="text-align:right">操作</th></tr></thead>
+                <tbody><tr v-for="item in transferDraft" :key="item.id"><td>{{ item.product_name }}<div class="code-cell">{{ item.barcode }}</div></td><td>{{ item.color || '-' }} / {{ item.size || '-' }}</td><td>{{ item.available }}</td><td><input class="qty-in" type="number" min="1" :max="item.available" v-model.number="item.qty" /></td><td style="text-align:right"><button class="btn sm ghost" @click="removeTransferItem(item.id)">移除</button></td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div v-if="isManager" class="card">
+            <div class="card-head"><h2>批量调拨单</h2><span class="hint">支持分批、部分收货和拒收退回</span></div>
+            <div class="table-wrap" v-if="transferBatches.length">
+              <table>
+                <thead><tr><th>调拨单号</th><th>商品</th><th>路线</th><th>状态</th><th>发货人</th><th>时间</th><th style="text-align:right">操作</th></tr></thead>
+                <tbody>
+                  <tr v-for="t in transferBatches" :key="t.id">
+                    <td class="code-cell strong">{{ t.transfer_no }}</td>
+                    <td><div v-for="item in t.items" :key="item.id">{{ item.product_name }} {{ item.color || '-' }}/{{ item.size || '-' }} × {{ item.qty }} <span v-if="item.remaining_qty">（在途 {{ item.remaining_qty }}）</span></div></td>
+                    <td>{{ t.from_store }} → {{ t.to_store }}</td>
+                    <td><span class="status-tag" :class="t.status">{{ {shipped:'在途',partial:'部分收货',received:'已完成',cancelled:'已取消'}[t.status] }}</span></td>
+                    <td>{{ t.created_by }}</td>
+                    <td>{{ fmtTime(t.created_at) }}</td>
+                    <td style="text-align:right">
+                      <div class="actions" style="justify-content:flex-end" v-if="t.status==='shipped' || t.status==='partial'">
+                        <button class="btn sm" @click="openBatchReceive(t)">录入收货</button>
+                        <button v-if="t.status==='shipped'" class="btn sm ghost" @click="cancelTransferBatch(t)">取消调拨</button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else class="empty">暂无批量调拨单</div>
+          </div>
+          <div v-if="isManager" class="card">
+            <div class="card-head"><h2>门店盘点</h2><span class="hint">完成盘点时会检测盘点期间是否发生销售或调拨，防止覆盖新库存</span></div>
+            <div class="row">
+              <div class="field"><label>盘点门店</label><select v-model="countStore" style="width:150px"><option v-for="s in stores" :key="s" :value="s">{{ s }}</option></select></div>
+              <div class="field" style="flex:1;min-width:180px"><label>备注</label><input v-model="countNote" placeholder="如：月末盘点" /></div>
+              <button class="btn" @click="startInventoryCount">新建盘点单</button>
+            </div>
+            <div class="table-wrap" v-if="counts.length" style="margin-top:14px"><table><thead><tr><th>盘点单号</th><th>门店</th><th>录入进度</th><th>状态</th><th>创建人</th><th>时间</th><th style="text-align:right">操作</th></tr></thead><tbody>
+              <tr v-for="c in counts" :key="c.id"><td class="code-cell strong">{{ c.count_no }}</td><td>{{ c.store }}</td><td>{{ c.entered_count }} / {{ c.item_count }}</td><td><span class="status-tag" :class="c.status">{{ {draft:'盘点中',completed:'已完成',cancelled:'已取消'}[c.status] }}</span></td><td>{{ c.created_by }}</td><td>{{ fmtTime(c.created_at) }}</td><td style="text-align:right"><div class="actions" style="justify-content:flex-end"><button class="btn sm ghost" @click="openInventoryCount(c.id)">查看/录入</button><button v-if="c.status==='draft'" class="btn sm danger-ghost" @click="cancelInventoryCount(c)">取消</button></div></td></tr>
+            </tbody></table></div>
+            <div v-else class="empty">暂无盘点单</div>
+          </div>
+        </template>
+
+        <!-- ============ 商品录入 ============ -->
+        <template v-if="tab==='product'">
+          <div class="card">
+            <div class="card-head"><h2>新建款式（SPU）</h2></div>
+            <div class="row">
+              <div class="field"><label>款号 *</label><input v-model="np.code" placeholder="如 TS001" style="width:130px" /></div>
+              <div class="field"><label>款名 *</label><input v-model="np.name" placeholder="如 纯棉圆领T恤" style="width:180px" /></div>
+              <div class="field"><label>品类</label><input v-model="np.category" placeholder="上衣" style="width:110px" /></div>
+              <div class="field"><label>品牌</label><input v-model="np.brand" style="width:120px" /></div>
+              <div class="field"><label>吊牌价</label><input type="number" v-model.number="np.tag_price" style="width:100px" /></div>
+              <button class="btn" @click="createProduct">创建款式</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>批量生成 SKU（颜色 × 尺码）</h2></div>
+            <div class="row">
+              <div class="field"><label>选择款式</label>
+                <select v-model="batch.product_id" style="width:200px">
+                  <option :value="null">— 请选择 —</option>
+                  <option v-for="p in products" :key="p.id" :value="p.id">{{ p.code }} {{ p.name }}</option>
+                </select></div>
+              <div class="field"><label>颜色（逗号分隔）</label><input v-model="batch.colorStr" placeholder="红,蓝,黑" style="width:150px" /></div>
+              <div class="field"><label>尺码（逗号分隔）</label><input v-model="batch.sizeStr" placeholder="S,M,L,XL" style="width:150px" /></div>
+              <div class="field"><label>售价</label><input type="number" v-model.number="batch.price" style="width:84px" /></div>
+              <div class="field"><label>成本</label><input type="number" v-model.number="batch.cost" style="width:84px" /></div>
+              <div class="field"><label>1号店初始库存</label><input type="number" v-model.number="batch.quantity" style="width:84px" /></div>
+              <div class="field"><label>安全库存</label><input type="number" v-model.number="batch.safety_stock" style="width:84px" /></div>
+              <button class="btn" @click="batchCreate">生成</button>
+            </div>
+            <p class="muted" style="margin:14px 0 0">例：红/蓝/黑 × S/M/L = 一次生成 9 个 SKU，条码自动分配。</p>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>已有款式</h2><span class="hint" v-if="products.length">共 {{ products.length }} 款</span></div>
+            <div class="table-wrap" v-if="products.length">
+              <table>
+                <thead><tr><th>款号</th><th>款名</th><th>品类</th><th>吊牌价</th><th style="text-align:right">操作</th></tr></thead>
+                <tbody>
+                  <tr v-for="p in products" :key="p.id">
+                    <td class="code-cell strong">{{ p.code }}</td>
+                    <td class="strong">{{ p.name }}</td>
+                    <td>{{ p.category || '-' }}</td>
+                    <td class="price">¥{{ p.tag_price }}</td>
+                    <td style="text-align:right">
+                      <button v-if="isManager" class="btn sm danger-ghost" @click="delProduct(p)">删除（含其 SKU）</button>
+                      <span v-else class="muted">—</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else class="empty"><div>还没有款式。</div></div>
+          </div>
+        </template>
+
+        <!-- ============ 收银 ============ -->
+        <template v-if="tab==='pos'">
+          <div class="card">
+            <div class="card-head"><h2>扫码收银</h2></div>
+            <input ref="scan" class="scan-box" v-model="scanInput" @keyup.enter="scan"
+                   placeholder="扫描条码 或 手动输入条码后回车" />
+            <p class="muted" style="margin:12px 0 0">USB 扫描枪即插即用：它本质是键盘，扫一下会自动输入条码并回车。</p>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>购物车</h2><span class="hint" v-if="cart.length">{{ cart.length }} 项</span></div>
+            <div class="table-wrap" v-if="cart.length">
+              <table>
+                <thead><tr><th>商品</th><th>颜色 / 尺码</th><th>条码</th><th>单价</th><th>数量</th><th>小计</th><th></th></tr></thead>
+                <tbody>
+                  <tr v-for="(c,i) in cart" :key="c.id">
+                    <td class="strong">{{ c.product_name }}</td>
+                    <td>{{ c.color }}/{{ c.size }}</td>
+                    <td class="code-cell">{{ c.barcode }}</td>
+                    <td class="price">¥{{ c.price }}</td>
+                    <td><input class="qty-in" type="number" min="1" v-model.number="c.qty" /></td>
+                    <td class="price strong">¥{{ (c.price*c.qty).toFixed(2) }}</td>
+                    <td style="text-align:right"><button class="btn sm danger-ghost" @click="cart.splice(i,1)">移除</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else class="empty">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/></svg>
+              <div>购物车为空，扫码添加商品。</div>
+            </div>
+            <div class="checkout-bar">
+              <div><span class="total-label">合计</span><span class="total">¥{{ cartTotal }}</span></div>
+              <div class="actions">
+                <button class="btn ghost" @click="cart=[]" :disabled="!cart.length">清空</button>
+                <button class="btn" @click="checkout" :disabled="!cart.length || checkingOut">{{ checkingOut ? '结算中...' : '结算扣库存' }}</button>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- ============ 账单流水 ============ -->
+        <template v-if="tab==='orders'">
+          <div class="stat-row">
+            <div class="stat"><div class="k">订单数</div><div class="v">{{ orderSummary.count }}</div></div>
+            <div class="stat"><div class="k">销售件数</div><div class="v">{{ orderSummary.item_count }}</div></div>
+            <div class="stat"><div class="k">销售额合计</div><div class="v">¥{{ orderSummary.total }}</div></div>
+          </div>
+          <div class="card">
+            <div class="row">
+              <div class="field"><label>门店</label>
+                <select v-model="orderFilter.store" :disabled="!isManager" style="width:130px">
+                  <option v-if="isManager" value="">全部门店</option>
+                  <option v-for="s in (isManager ? stores : [currentStore])" :key="s" :value="s">{{ s }}</option>
+                </select></div>
+              <div class="field"><label>单号</label><input v-model="orderFilter.keyword" placeholder="按单号搜索" style="width:170px" /></div>
+              <div class="field"><label>开始日期</label><input type="date" v-model="orderFilter.date_from" /></div>
+              <div class="field"><label>结束日期</label><input type="date" v-model="orderFilter.date_to" /></div>
+              <button class="btn" @click="loadOrders">查询</button>
+              <button class="btn ghost" @click="resetOrderFilter">重置</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>销售单</h2><span class="hint" v-if="orders.length">共 {{ orders.length }} 单</span></div>
+            <div class="table-wrap" v-if="orders.length">
+              <table>
+                <thead><tr><th>单号</th><th>时间</th><th>门店</th><th>件数</th><th>合计</th><th>收银员</th><th style="text-align:right">操作</th></tr></thead>
+                <tbody>
+                  <tr v-for="o in orders" :key="o.id">
+                    <td class="code-cell strong">{{ o.order_no }}</td>
+                    <td>{{ fmtTime(o.created_at) }}</td>
+                    <td><span v-if="o.store" class="pill badge-store">{{ o.store }}</span><span v-else class="muted">-</span></td>
+                    <td>{{ o.item_count }}</td>
+                    <td class="price strong">¥{{ o.total }}</td>
+                    <td>{{ o.operator || '-' }}</td>
+                    <td style="text-align:right"><span class="link" @click="openOrder(o.id)">查看明细</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else class="empty">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/></svg>
+              <div>暂无账单，去「收银」完成一笔结算就会出现在这里。</div>
+            </div>
+          </div>
+        </template>
+
+        <!-- ============ 账号管理（店长） ============ -->
+        <template v-if="tab==='users'">
+          <div class="card">
+            <div class="card-head"><h2>新建账号</h2></div>
+            <div class="row">
+              <div class="field"><label>用户名 *</label><input v-model="newUser.username" placeholder="登录用" style="width:140px" /></div>
+              <div class="field"><label>密码（至少10位）*</label><input v-model="newUser.password" type="password" minlength="10" style="width:160px" /></div>
+              <div class="field"><label>姓名</label><input v-model="newUser.name" style="width:120px" /></div>
+              <div class="field"><label>角色</label>
+                <select v-model="newUser.role" style="width:110px">
+                  <option value="staff">店员</option>
+                  <option value="manager">店长</option>
+                </select></div>
+              <div class="field"><label>门店</label>
+                <select v-model="newUser.store" style="width:120px">
+                  <option value="">不限</option>
+                  <option v-for="s in stores" :key="s" :value="s">{{ s }}</option>
+                </select></div>
+              <button class="btn" @click="createUser">创建账号</button>
+            </div>
+            <p class="muted" style="margin:14px 0 0">店员可收银、查本店库存和账单；店长可管理库存、调拨、盘点、退款、商品和账号。</p>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>账号列表</h2><span class="hint" v-if="users.length">共 {{ users.length }} 个</span></div>
+            <div class="table-wrap" v-if="users.length">
+              <table>
+                <thead><tr><th>用户名</th><th>姓名</th><th>角色</th><th>门店</th><th>状态</th><th style="text-align:right">操作</th></tr></thead>
+                <tbody>
+                  <tr v-for="u in users" :key="u.id">
+                    <td class="strong">{{ u.username }}</td>
+                    <td>{{ u.name || '-' }}</td>
+                    <td><span class="role-tag" :class="u.role">{{ u.role==='manager' ? '店长' : '店员' }}</span></td>
+                    <td>{{ u.store || '不限' }}</td>
+                    <td><span :style="{color: u.active ? 'var(--ok)' : 'var(--text-faint)'}">{{ u.active ? '启用' : '停用' }}</span></td>
+                    <td style="text-align:right">
+                      <div class="actions" style="justify-content:flex-end">
+                        <button class="btn sm ghost" @click="toggleUser(u)">{{ u.active ? '停用' : '启用' }}</button>
+                        <button class="btn sm danger-ghost" :disabled="me && u.id===me.id" @click="delUser(u)">停用并保留</button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else class="empty"><div>暂无账号。</div></div>
+          </div>
+        </template>
+      </main>
+    </div>
+  </div>
+
+  <!-- 入库/出库/调拨 确认弹窗 -->
+  <div class="modal-mask" v-if="pendingMove" @click.self="pendingMove=null">
+    <div class="modal">
+      <div class="modal-icon" :class="pendingMove.dir==='out' || pendingMove.dir==='transfer' ? 'danger' : 'warn'">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <template v-if="pendingMove.dir==='in'"><path d="M12 5v14M5 12l7 7 7-7"/></template>
+          <template v-else-if="pendingMove.dir==='transfer'"><path d="M5 12h14M13 6l6 6-6 6"/></template>
+          <template v-else><path d="M12 19V5M5 12l7-7 7 7"/></template>
+        </svg>
+      </div>
+      <div class="modal-title">确认{{ pendingMove.dir==='transfer' ? '发货调拨' : (pendingMove.dir==='in' ? '入库' : '出库') }}</div>
+      <div class="modal-detail">
+        <div><span>款式</span><span>{{ pendingMove.sku.product_name }}（{{ pendingMove.sku.product_code }}）</span></div>
+        <div><span>规格</span><span>{{ pendingMove.sku.color || '-' }} / {{ pendingMove.sku.size || '-' }}</span></div>
+        <div><span>条码</span><span>{{ pendingMove.sku.barcode }}</span></div>
+        <div><span>调出门店</span><span>{{ pendingMove.fromStore }}</span></div>
+        <div v-if="pendingMove.dir==='transfer'">
+          <span>调入门店</span>
+          <span>
+            <select v-model="pendingMove.toStore">
+              <option v-for="s in transferTargets" :key="s" :value="s">{{ s }}</option>
+            </select>
+          </span>
+        </div>
+      </div>
+      <div class="move-preview">
+        <span>{{ pendingMove.sku.quantity }}</span>
+        <span class="arrow">→</span>
+        <span :style="{color: pendingMove.dir==='in' ? 'var(--ok)' : 'var(--danger)'}">{{ newQty }}</span>
+        <span class="delta">{{ pendingMoveLabel }}{{ pendingMove.qty }} 件</span>
+      </div>
+      <div class="modal-actions">
+        <button class="btn ghost" @click="pendingMove=null">取消</button>
+        <button class="btn" :disabled="moveSubmitting" :class="{danger: pendingMove.dir==='out' || pendingMove.dir==='transfer'}" @click="confirmMove">{{ moveSubmitting ? '提交中...' : ('确认' + (pendingMove.dir==='transfer' ? '发货' : (pendingMove.dir==='in' ? '入库' : '出库'))) }}</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-mask" v-if="batchReceive" @click.self="batchReceive=null">
+    <div class="modal" style="max-width:760px">
+      <div class="modal-title">录入收货 · {{ batchReceive.transfer_no }}</div>
+      <div class="modal-desc">只填写本次实际到货或拒收数量；未填写的商品继续保持在途。</div>
+      <div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>商品</th><th>已发</th><th>已收</th><th>拒收</th><th>在途</th><th>本次实收</th><th>本次拒收</th></tr></thead><tbody>
+        <tr v-for="item in batchReceive.items" :key="item.id"><td>{{ item.product_name }} {{ item.color || '-' }}/{{ item.size || '-' }}</td><td>{{ item.qty }}</td><td>{{ item.received_qty }}</td><td>{{ item.rejected_qty }}</td><td>{{ item.remaining_qty }}</td><td><input class="qty-in" type="number" min="0" :max="item.remaining_qty" v-model.number="batchReceiveValues[item.id].received_qty" /></td><td><input class="qty-in" type="number" min="0" :max="item.remaining_qty" v-model.number="batchReceiveValues[item.id].rejected_qty" /></td></tr>
+      </tbody></table></div>
+      <div class="modal-actions"><button class="btn ghost" @click="batchReceive=null">取消</button><button class="btn" :disabled="batchReceiveSubmitting" @click="submitBatchReceive">{{ batchReceiveSubmitting ? '保存中...' : '保存本次收货' }}</button></div>
+    </div>
+  </div>
+
+  <div class="modal-mask" v-if="countDetail" @click.self="countDetail=null">
+    <div class="modal" style="max-width:900px">
+      <div class="modal-title">盘点单 · {{ countDetail.count_no }}</div>
+      <div class="modal-desc">{{ countDetail.store }} · 系统数是建单快照；完成时会验证库存未在期间变化。</div>
+      <div class="table-wrap" style="margin-top:14px;max-height:430px"><table><thead><tr><th>商品</th><th>规格</th><th>条码</th><th>系统数</th><th>实盘数</th><th>差异</th></tr></thead><tbody>
+        <tr v-for="item in countDetail.items" :key="item.id"><td>{{ item.product_name }}<div class="code-cell">{{ item.product_code }}</div></td><td>{{ item.color || '-' }} / {{ item.size || '-' }}</td><td class="code-cell">{{ item.barcode }}</td><td>{{ item.system_qty }}</td><td><input class="qty-in" type="number" min="0" v-model.number="countActual[item.id]" :disabled="countDetail.status!=='draft'" /></td><td :class="{danger: countDifference(item)!==0}">{{ countDifference(item) }}</td></tr>
+      </tbody></table></div>
+      <div class="modal-actions"><button class="btn ghost" @click="countDetail=null">关闭</button><button v-if="countDetail.status==='draft'" class="btn" @click="completeInventoryCount">保存并完成盘点</button></div>
+    </div>
+  </div>
+
+  <!-- 通用确认弹窗（删除等） -->
+  <div class="modal-mask" v-if="confirmBox" @click.self="confirmBox=null">
+    <div class="modal">
+      <div class="modal-icon" :class="confirmBox.danger ? 'danger' : 'warn'">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6M14 11v6"/></svg>
+      </div>
+      <div class="modal-title">{{ confirmBox.title }}</div>
+      <p class="modal-desc">{{ confirmBox.desc }}</p>
+      <div class="modal-actions">
+        <button class="btn ghost" @click="confirmBox=null">取消</button>
+        <button class="btn" :disabled="confirmRunning" :class="{danger: confirmBox.danger}" @click="runConfirm">{{ confirmRunning ? '处理中...' : (confirmBox.okText || '确认') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 条码弹窗 -->
+  <div class="modal-mask" v-if="barcodeSku" @click.self="closeBarcode">
+    <div class="modal barcode-stage">
+      <div class="modal-title">{{ barcodeSku.product_name }}</div>
+      <p class="modal-desc">{{ barcodeSku.color || '-' }} / {{ barcodeSku.size || '-' }} · {{ barcodeSku.barcode }}</p>
+      <img v-if="barcodeUrl" :src="barcodeUrl" style="margin-top:8px" />
+      <div class="modal-actions">
+        <button class="btn ghost" @click="closeBarcode">关闭</button>
+        <button class="btn" @click="printBarcode">打印</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 账单明细弹窗 -->
+  <div class="modal-mask" v-if="orderDetail" @click.self="orderDetail=null">
+    <div class="modal" style="min-width:480px;max-width:600px">
+      <div class="modal-title">销售单明细</div>
+      <div class="modal-detail">
+        <div><span>单号</span><span>{{ orderDetail.order_no }}</span></div>
+        <div><span>时间</span><span>{{ fmtTime(orderDetail.created_at) }}</span></div>
+        <div><span>门店</span><span>{{ orderDetail.store || '-' }}</span></div>
+        <div><span>收银员</span><span>{{ orderDetail.operator || '-' }}</span></div>
+        <div><span>状态</span><span><span class="status-tag" :class="orderDetail.status">{{ {paid:'已付款',partial_refunded:'部分退货',refunded:'已退货'}[orderDetail.status] }}</span></span></div>
+        <div v-if="orderDetail.refunded > 0"><span>已退金额</span><span style="color:var(--danger)">−¥{{ orderDetail.refunded }}</span></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>商品</th><th>规格</th><th>单价</th><th>数量</th><th>已退</th><th v-if="isManager">退货数</th><th style="text-align:right">小计</th></tr></thead>
+          <tbody>
+            <tr v-for="(it,i) in orderDetail.items" :key="i">
+              <td><div class="strong">{{ it.product_name }}</div><div class="code-cell">{{ it.barcode }}</div></td>
+              <td>{{ it.color || '-' }}/{{ it.size || '-' }}</td>
+              <td class="price">¥{{ it.price }}</td>
+              <td>{{ it.qty }}</td>
+              <td>{{ it.refunded_qty }}</td>
+              <td v-if="isManager">
+                <input class="qty-in" type="number" min="0" :max="it.returnable" v-model.number="refundQty[i]"
+                       :disabled="it.returnable<=0" :placeholder="it.returnable>0 ? ('可退'+it.returnable) : '已退完'" />
+              </td>
+              <td class="price strong" style="text-align:right">¥{{ it.subtotal }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="checkout-bar">
+        <div><span class="total-label">合计</span><span class="total">¥{{ orderDetail.total }}</span></div>
+        <div class="actions">
+          <button class="btn ghost" @click="orderDetail=null">关闭</button>
+          <button class="btn ghost" @click="printOrder">打印小票</button>
+          <button v-if="isManager && orderDetail.status!=='refunded'" class="btn danger" :disabled="refundSubmitting" @click="doRefund">{{ refundSubmitting ? '退款中...' : '确认退货' }}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" v-if="toast">{{ toast }}</div>
+</div>
+
+<script>
+const { createApp } = Vue;
+localStorage.removeItem('pos_token');
+let onUnauthorized = () => {};
+const readCookie = name => document.cookie.split('; ').find(v => v.startsWith(name+'='))?.split('=').slice(1).join('=') || '';
+const newRequestId = prefix => prefix + '-' + ((typeof crypto !== 'undefined' && crypto.randomUUID)
+  ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2)));
+const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, ch => ({
+  '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;'
+}[ch]));
+const api = async (url, opt={}) => {
+  const headers = { 'Content-Type':'application/json', ...(opt.headers||{}) };
+  const method = (opt.method || 'GET').toUpperCase();
+  if (!['GET','HEAD','OPTIONS'].includes(method)) {
+    const csrf = readCookie('pos_csrf');
+    if (csrf) headers['X-CSRF-Token'] = decodeURIComponent(csrf);
+  }
+  const r = await fetch(url, { ...opt, headers, credentials:'same-origin' });
+  if (r.status === 401) { onUnauthorized(); throw new Error('登录已过期，请重新登录'); }
+  if (!r.ok) { const e = await r.json().catch(()=>({detail:'请求失败'})); throw new Error(e.detail || '请求失败'); }
+  return r.json();
+};
+
+// 四家门店各自维护独立库存，总部管理员可以查看汇总。
+// 改店名 / 增减门店只需改这里一行。
+const STORES = ['1号店', '2号店', '3号店', '4号店'];
+
+createApp({
+  data() {
+    return {
+      tab: 'stock', toast: '', barcodeSku: null, barcodeUrl: '', pendingMove: null, confirmBox: null,
+      stores: STORES,
+      currentStore: localStorage.getItem('pos_store') || STORES[0],
+      storeMenuOpen: false, storeMenuIndex: 0,
+      // 鉴权
+      me: null,
+      loginForm: { username: '', password: '' }, loginError: '', loggingIn: false,
+      // 账号管理
+      users: [], newUser: { username:'', password:'', name:'', role:'staff', store:'' },
+      // 退货（订单明细内每行的退货数量）
+      refundQty: {},
+      // 库存
+      skus: [], transfers: [], transferDraft: [], transferTarget: '', transferNote: '', transferRequestId: '', transferSubmitting: false, transferBatches: [], batchReceive: null, batchReceiveValues: {}, batchReceiveSubmitting: false, counts: [], countStore: STORES[0], countNote: '', countDetail: null, countActual: {}, stockKeyword: '', lowOnly: false, includeInactive: false,
+      stockStore: localStorage.getItem('pos_store') || STORES[0],
+      // 商品
+      products: [],
+      np: { code:'', name:'', category:'', brand:'', tag_price:0 },
+      batch: { product_id:null, colorStr:'', sizeStr:'', price:0, cost:0, quantity:0, safety_stock:0 },
+      // 收银
+      scanInput: '', cart: [], checkingOut: false, checkoutRequestId: '', moveSubmitting: false,
+      // 账单流水
+      orders: [], orderSummary: { count:0, item_count:0, total:0 }, orderDetail: null, refundRequestId: '', refundSubmitting: false, confirmRunning: false,
+      orderFilter: { store:'', keyword:'', date_from:'', date_to:'' },
+    };
+  },
+  watch: {
+    currentStore(v) {
+      localStorage.setItem('pos_store', v);
+      if (this.stockStore !== 'all') this.stockStore = v;
+      if (this.tab === 'stock') this.loadStock();
+    },
+    stockStore(v) {
+      if (this.transferDraft.length) this.transferDraft = [];
+      this.transferRequestId = '';
+      if (v !== 'all') this.transferTarget = this.stores.find(s => s !== v) || '';
+    },
+  },
+  computed: {
+    cartTotal() { return this.cart.reduce((s,c)=> s + c.price*c.qty, 0).toFixed(2); },
+    newQty() {
+      if (!this.pendingMove) return 0;
+      const { sku, dir, qty } = this.pendingMove;
+      return dir === 'in' ? sku.quantity + qty : sku.quantity - qty;
+    },
+    transferTargets() {
+      if (!this.pendingMove) return [];
+      return this.stores.filter(s => s !== this.pendingMove.fromStore);
+    },
+    transferTargetsForDraft() {
+      const fromStore = this.stockStore === 'all' ? '' : this.stockStore;
+      return this.stores.filter(s => s !== fromStore);
+    },
+    pendingMoveLabel() {
+      if (!this.pendingMove) return '';
+      if (this.pendingMove.dir === 'in') return '入库 +';
+      if (this.pendingMove.dir === 'transfer') return '发货 −';
+      return '出库 −';
+    },
+    isManager() { return !!(this.me && this.me.role === 'manager'); },
+    pageTitle() { return { stock:'库存查询', product:'商品录入', pos:'收银', orders:'账单流水', users:'账号管理' }[this.tab]; },
+    pageSub() {
+      return {
+        stock: '按款名 / 款号 / 条码查询库存，支持低库存预警',
+        product: '建立款式并批量生成颜色 × 尺码的 SKU',
+        pos: '扫码加购，结算自动扣减库存',
+        orders: '每店独立库存，账单按门店归属、可筛选查看、退货与重打小票',
+        users: '管理店员 / 店长账号（仅店长可见）',
+      }[this.tab];
+    },
+  },
+  methods: {
+    flash(msg){ this.toast = msg; setTimeout(()=> this.toast='', 1800); },
+
+    // ---------- 门店选择 ----------
+    toggleStoreMenu(){
+      if (!this.isManager) return;
+      this.storeMenuOpen ? this.closeStoreMenu() : this.openStoreMenu();
+    },
+    openStoreMenu(){
+      if (!this.isManager) return;
+      const currentIndex = this.stores.indexOf(this.currentStore);
+      this.storeMenuIndex = currentIndex >= 0 ? currentIndex : 0;
+      this.storeMenuOpen = true;
+      this.$nextTick(()=> this.focusStoreOptionAt(this.storeMenuIndex));
+    },
+    closeStoreMenu(returnFocus=false){
+      this.storeMenuOpen = false;
+      if (returnFocus) this.$nextTick(()=> this.$refs.storeTrigger?.focus());
+    },
+    focusStoreOptionAt(index){
+      const options = this.$refs.storePicker?.querySelectorAll('.store-option');
+      if (!options?.length) return;
+      this.storeMenuIndex = Math.max(0, Math.min(index, options.length - 1));
+      options[this.storeMenuIndex].focus();
+    },
+    moveStoreOption(step){
+      const length = this.stores.length;
+      if (!length) return;
+      this.focusStoreOptionAt((this.storeMenuIndex + step + length) % length);
+    },
+    selectCurrentStore(store){
+      if (!this.isManager || !this.stores.includes(store)) return;
+      this.currentStore = store;
+      this.closeStoreMenu(true);
+    },
+    handleStorePickerOutside(event){
+      if (this.storeMenuOpen && !this.$refs.storePicker?.contains(event.target)) this.closeStoreMenu();
+    },
+
+    // ---------- 鉴权 ----------
+    async login(){
+      if(!this.loginForm.username || !this.loginForm.password){ this.loginError='请输入用户名和密码'; return; }
+      this.loggingIn = true; this.loginError = '';
+      try {
+        const res = await api('/api/auth/login', { method:'POST', body: JSON.stringify(this.loginForm) });
+        this.me = res.user;
+        if (this.me.store) this.currentStore = this.me.store;
+        if (!this.isManager) this.orderFilter.store = this.currentStore;
+        this.loginForm = { username:'', password:'' };
+        this.tab = 'stock'; this.loadStock();
+      } catch(e){ this.loginError = e.message; }
+      finally { this.loggingIn = false; }
+    },
+    async logout(){
+      try { await api('/api/auth/logout', { method:'POST' }); } catch(e){}
+      this.closeStoreMenu();
+      this.me = null;
+    },
+    async fetchMe(){
+      try {
+        this.me = await api('/api/auth/me');
+        if (this.me.store) this.currentStore = this.me.store;
+        if (!this.isManager) this.orderFilter.store = this.currentStore;
+        this.loadStock();
+      }
+      catch(e){ /* 401 时 onUnauthorized 已清空登录态 */ }
+    },
+
+    // ---------- 账号管理（店长） ----------
+    goUsers(){ this.tab='users'; this.loadUsers(); },
+    async loadUsers(){ try { this.users = await api('/api/users'); } catch(e){ this.flash(e.message); } },
+    async createUser(){
+      if(!this.newUser.username || !this.newUser.password){ return this.flash('用户名和密码必填'); }
+      if(this.newUser.password.length < 10){ return this.flash('密码至少需要 10 个字符'); }
+      try {
+        await api('/api/users', { method:'POST', body: JSON.stringify(this.newUser) });
+        this.flash('账号已创建');
+        this.newUser = { username:'', password:'', name:'', role:'staff', store:'' };
+        this.loadUsers();
+      } catch(e){ this.flash(e.message); }
+    },
+    async toggleUser(u){
+      try {
+        await api('/api/users/'+u.id, { method:'PUT', body: JSON.stringify({ active: !u.active }) });
+        this.flash(u.active ? '已停用' : '已启用'); this.loadUsers();
+      } catch(e){ this.flash(e.message); }
+    },
+    delUser(u){
+      this.confirmBox = {
+        title: `停用账号「${u.username}」？`,
+        desc: '账号会立即退出并无法登录，历史操作记录继续保留。', okText: '停用账号', danger: true,
+        onOk: async () => { await api('/api/users/'+u.id, {method:'DELETE'}); this.flash('账号已停用'); this.loadUsers(); },
+      };
+    },
+
+    goStock(){ this.tab='stock'; this.loadStock(); },
+    goProduct(){ this.tab='product'; this.loadProducts(); },
+    goPos(){ this.tab='pos'; this.$nextTick(()=> this.$refs.scan && this.$refs.scan.focus()); },
+
+    async loadStock(){
+      try {
+        const q = new URLSearchParams();
+        if (this.stockStore === 'all' && !this.isManager) this.stockStore = this.currentStore;
+        q.set('store', this.stockStore || this.currentStore);
+        if (this.stockKeyword) q.set('keyword', this.stockKeyword);
+        if (this.lowOnly) q.set('low_stock', 'true');
+        if (this.includeInactive && this.isManager) q.set('include_inactive', 'true');
+        this.skus = (await api('/api/skus?'+q)).map(s=> ({...s, _qty: 1}));
+        if (this.isManager) {
+          if (!this.countStore || !this.stores.includes(this.countStore)) this.countStore = this.currentStore;
+          if (!this.transferTarget || this.transferTarget === this.stockStore) this.transferTarget = this.transferTargetsForDraft[0] || '';
+          this.loadTransferBatches(); this.loadCounts();
+        }
+      } catch(e){ this.flash(e.message); }
+    },
+    askMove(s, dir){
+      const qty = s._qty || 1;
+      if (this.stockStore === 'all') {
+        return this.flash('汇总视图不能直接入库/出库，请先选择具体门店');
+      }
+      if (qty <= 0) { return this.flash('数量必须大于 0'); }
+      if (dir === 'out' && qty > s.quantity) {
+        return this.flash('出库数量不能大于当前库存 '+s.quantity);
+      }
+      this.pendingMove = { sku: s, dir, qty, fromStore: this.stockStore || this.currentStore, requestId:newRequestId('stock') };
+    },
+    askTransfer(s){
+      const qty = s._qty || 1;
+      if (this.stockStore === 'all') {
+        return this.flash('汇总视图不能直接调拨，请先选择具体调出门店');
+      }
+      if (qty <= 0) { return this.flash('数量必须大于 0'); }
+      if (qty > s.quantity) {
+        return this.flash('调拨数量不能大于当前库存 '+s.quantity);
+      }
+      const fromStore = this.stockStore || this.currentStore;
+      const toStore = this.stores.find(x => x !== fromStore) || this.stores[0];
+      this.pendingMove = { sku: s, dir: 'transfer', qty, fromStore, toStore, requestId:newRequestId('transfer') };
+    },
+    addTransferItem(s){
+      if (this.stockStore === 'all') return this.flash('请先选择具体调出门店，再加入调拨单');
+      const qty = Number(s._qty) || 1;
+      if (qty <= 0 || qty > s.quantity) return this.flash('调拨数量必须大于 0 且不超过当前库存');
+      const existing = this.transferDraft.find(item => item.id === s.id);
+      if (existing) {
+        existing.qty = Math.min(existing.available, existing.qty + qty);
+      } else {
+        this.transferDraft.push({ id:s.id, product_name:s.product_name, product_code:s.product_code, barcode:s.barcode, color:s.color, size:s.size, available:s.quantity, qty });
+      }
+      this.transferRequestId = '';
+      if (!this.transferTarget || this.transferTarget === this.stockStore) this.transferTarget = this.transferTargetsForDraft[0] || '';
+      this.flash('已加入批量调拨单');
+    },
+    removeTransferItem(skuId){ this.transferDraft = this.transferDraft.filter(item => item.id !== skuId); this.transferRequestId = ''; },
+    async createTransferBatch(){
+      if (this.transferSubmitting) return;
+      if (this.stockStore === 'all') return this.flash('汇总视图不能发起调拨');
+      if (!this.transferTarget || this.transferTarget === this.stockStore) return this.flash('请选择调入门店');
+      const items = this.transferDraft.map(item => ({ sku_id:item.id, qty:Number(item.qty) || 0 }));
+      if (!items.length || items.some(item => item.qty <= 0)) return this.flash('请填写正确的调拨数量');
+      if (!this.transferRequestId) this.transferRequestId = newRequestId('transfer');
+      this.transferSubmitting = true;
+      try {
+        const result = await api('/api/stock/transfer-batches', { method:'POST', body:JSON.stringify({ from_store:this.stockStore, to_store:this.transferTarget, items, note:this.transferNote || null, client_request_id:this.transferRequestId }) });
+        this.flash(`批量调拨单 ${result.transfer.transfer_no} 已发货`);
+        this.transferDraft = []; this.transferNote = ''; this.transferRequestId = '';
+        this.loadStock();
+      } catch(e){ this.flash(e.message); }
+      finally { this.transferSubmitting = false; }
+    },
+    async confirmMove(){
+      if (!this.pendingMove || this.moveSubmitting) return;
+      const { sku, dir, qty } = this.pendingMove;
+      this.moveSubmitting = true;
+      try {
+        if (dir === 'transfer') {
+          if (!this.pendingMove.toStore || this.pendingMove.toStore === this.pendingMove.fromStore) {
+            return this.flash('请选择正确的调入门店');
+          }
+          const result = await api('/api/stock/transfers', {
+            method:'POST',
+            body: JSON.stringify({
+              sku_id: sku.id,
+              qty,
+              from_store: this.pendingMove.fromStore,
+              to_store: this.pendingMove.toStore,
+              client_request_id: this.pendingMove.requestId,
+            })
+          });
+          this.flash(`调拨单 ${result.transfer.transfer_no} 已发货，等待 ${this.pendingMove.toStore} 收货`);
+        } else {
+          await api('/api/stock/'+dir, {
+            method:'POST',
+            body: JSON.stringify({
+              sku_id: sku.id,
+              qty,
+              store: this.stockStore || this.currentStore,
+              client_request_id: this.pendingMove.requestId,
+            })
+          });
+          this.flash((dir==='in'?'入库':'出库')+' '+qty+' 件');
+        }
+        this.pendingMove = null;
+        this.loadStock();
+      } catch(e){ this.flash(e.message); }
+      finally { this.moveSubmitting = false; }
+    },
+    async loadTransfers(){
+      try { this.transfers = await api('/api/stock/transfers'); }
+      catch(e){ this.flash(e.message); }
+    },
+    async loadTransferBatches(){
+      try { this.transferBatches = await api('/api/stock/transfer-batches'); }
+      catch(e){ this.flash(e.message); }
+    },
+    openBatchReceive(batch){
+      this.batchReceive = batch;
+      this.batchReceiveValues = {};
+      batch.items.forEach(item => { this.batchReceiveValues[item.id] = { received_qty:0, rejected_qty:0 }; });
+    },
+    async submitBatchReceive(){
+      if (this.batchReceiveSubmitting) return;
+      const items = this.batchReceive.items.map(item => ({
+        item_id:item.id,
+        received_qty:Number(this.batchReceiveValues[item.id].received_qty) || 0,
+        rejected_qty:Number(this.batchReceiveValues[item.id].rejected_qty) || 0,
+      })).filter(item => item.received_qty || item.rejected_qty);
+      if (!items.length) return this.flash('请填写至少一项实收或拒收数量');
+      this.batchReceiveSubmitting = true;
+      try {
+        await api('/api/stock/transfer-batches/'+this.batchReceive.id+'/receive', {method:'POST', body:JSON.stringify({items})});
+        this.flash('本次收货已保存'); this.batchReceive = null; this.loadStock();
+      } catch(e){ this.flash(e.message); }
+      finally { this.batchReceiveSubmitting = false; }
+    },
+    cancelTransferBatch(batch){
+      this.confirmBox = { title:`取消调拨单 ${batch.transfer_no}？`, desc:'仅未收货的调拨单可以取消，货物会退回调出门店。', okText:'取消调拨', danger:true,
+        onOk: async () => { await api('/api/stock/transfer-batches/'+batch.id+'/cancel', {method:'POST', body:JSON.stringify({})}); this.flash('调拨已取消'); this.loadStock(); },
+      };
+    },
+    async loadCounts(){
+      try { this.counts = await api('/api/stock/counts'); }
+      catch(e){ this.flash(e.message); }
+    },
+    async startInventoryCount(){
+      try {
+        const result = await api('/api/stock/counts', {method:'POST', body:JSON.stringify({store:this.countStore, note:this.countNote || null})});
+        this.countNote = ''; this.flash('盘点单已创建'); this.openCountData(result.count); this.loadCounts();
+      } catch(e){ this.flash(e.message); }
+    },
+    async openInventoryCount(countId){
+      try { this.openCountData(await api('/api/stock/counts/'+countId)); }
+      catch(e){ this.flash(e.message); }
+    },
+    openCountData(count){
+      this.countDetail = count; this.countActual = {};
+      count.items.forEach(item => { this.countActual[item.id] = item.actual_qty; });
+    },
+    countDifference(item){
+      const actual = this.countActual[item.id];
+      return actual === null || actual === undefined || actual === '' ? '-' : Number(actual) - item.system_qty;
+    },
+    async completeInventoryCount(){
+      const missing = this.countDetail.items.filter(item => this.countActual[item.id] === null || this.countActual[item.id] === undefined || this.countActual[item.id] === '');
+      if (missing.length) return this.flash(`还有 ${missing.length} 个商品未填写实盘数`);
+      try {
+        for (const item of this.countDetail.items) {
+          await api('/api/stock/counts/'+this.countDetail.id+'/items/'+item.id, {method:'PUT', body:JSON.stringify({actual_qty:Number(this.countActual[item.id])})});
+        }
+        const result = await api('/api/stock/counts/'+this.countDetail.id+'/complete', {method:'POST', body:JSON.stringify({})});
+        this.openCountData(result.count); this.flash('盘点完成，差异已记入库存流水'); this.loadStock();
+      } catch(e){ this.flash(e.message); }
+    },
+    cancelInventoryCount(count){
+      this.confirmBox = { title:`取消盘点单 ${count.count_no}？`, desc:'取消不会修改库存，之后可以重新建立盘点单。', okText:'取消盘点', danger:true,
+        onOk: async () => { await api('/api/stock/counts/'+count.id+'/cancel', {method:'POST', body:JSON.stringify({})}); this.flash('盘点单已取消'); this.loadCounts(); },
+      };
+    },
+    receiveTransfer(t){
+      this.confirmBox = {
+        title: `确认调拨单 ${t.transfer_no} 已到货？`, desc: `确认后 ${t.qty} 件将计入 ${t.to_store} 库存。`, okText:'确认收货', danger:false,
+        onOk: async () => { await api('/api/stock/transfers/'+t.id+'/receive', {method:'POST', body:JSON.stringify({})}); this.flash('已确认收货'); this.loadStock(); },
+      };
+    },
+    cancelTransfer(t){
+      this.confirmBox = {
+        title: `取消调拨单 ${t.transfer_no}？`, desc: `取消后 ${t.qty} 件将退回 ${t.from_store} 库存。`, okText:'取消调拨', danger:true,
+        onOk: async () => { await api('/api/stock/transfers/'+t.id+'/cancel', {method:'POST', body:JSON.stringify({})}); this.flash('调拨已取消，库存已退回'); this.loadStock(); },
+      };
+    },
+
+    // 通用确认弹窗
+    async runConfirm(){
+      const box = this.confirmBox;
+      if (!box || this.confirmRunning) return;
+      this.confirmRunning = true;
+      try { await box.onOk(); } catch(e){ this.flash(e.message); }
+      finally { this.confirmRunning = false; this.confirmBox = null; }
+    },
+    delSku(s){
+      this.confirmBox = {
+        title: '删除该 SKU？',
+        desc: `${s.product_name} · ${s.color || '-'}/${s.size || '-'} · 条码 ${s.barcode}。删除后该规格及其库存流水将一并移除，不可恢复。`,
+        okText: '删除', danger: true,
+        onOk: async () => { await api('/api/skus/'+s.id, {method:'DELETE'}); this.flash('已删除'); this.loadStock(); },
+      };
+    },
+    toggleSkuActive(s){
+      const next = !s.active;
+      this.confirmBox = {
+        title: next ? '启用该 SKU？' : '下架该 SKU？',
+        desc: next
+          ? `${s.product_name} · ${s.color || '-'}/${s.size || '-'} 将重新出现在库存和扫码销售中。`
+          : `${s.product_name} · ${s.color || '-'}/${s.size || '-'} 下架后默认隐藏，扫码收银也不能销售；历史账单仍会保留。`,
+        okText: next ? '启用' : '下架',
+        danger: !next,
+        onOk: async () => {
+          await api('/api/skus/'+s.id, {method:'PUT', body: JSON.stringify({ active: next })});
+          this.flash(next ? '已启用' : '已下架');
+          this.loadStock();
+        },
+      };
+    },
+    async showBarcode(s){
+      try {
+        const res = await fetch('/api/skus/'+s.id+'/barcode.png', { credentials:'same-origin' });
+        if (!res.ok) throw new Error('条码图片加载失败');
+        if (this.barcodeUrl) URL.revokeObjectURL(this.barcodeUrl);
+        this.barcodeUrl = URL.createObjectURL(await res.blob());
+        this.barcodeSku = s;
+      } catch(e){ this.flash(e.message); }
+    },
+    closeBarcode(){
+      if (this.barcodeUrl) URL.revokeObjectURL(this.barcodeUrl);
+      this.barcodeUrl = ''; this.barcodeSku = null;
+    },
+    printBarcode(){
+      if(!this.barcodeUrl) return;
+      const w = window.open('');
+      w.document.write('<img src="'+this.barcodeUrl+'" onload="window.print();window.close()">');
+    },
+
+    async loadProducts(){
+      try { this.products = await api('/api/products'); } catch(e){ this.flash(e.message); }
+    },
+    async createProduct(){
+      if(!this.np.code || !this.np.name){ return this.flash('款号和款名必填'); }
+      try {
+        await api('/api/products', { method:'POST', body: JSON.stringify(this.np) });
+        this.flash('款式已创建');
+        this.np = { code:'', name:'', category:'', brand:'', tag_price:0 };
+        this.loadProducts();
+      } catch(e){ this.flash(e.message); }
+    },
+    delProduct(p){
+      this.confirmBox = {
+        title: `删除款式「${p.name}」？`,
+        desc: `款号 ${p.code}。该款下的所有 SKU 及其库存流水会被一并删除，不可恢复。`,
+        okText: '删除', danger: true,
+        onOk: async () => { await api('/api/products/'+p.id, {method:'DELETE'}); this.flash('已删除'); this.loadProducts(); },
+      };
+    },
+    async batchCreate(){
+      if(!this.batch.product_id){ return this.flash('请选择款式'); }
+      const colors = this.batch.colorStr.split(/[,，]/).map(x=>x.trim()).filter(Boolean);
+      const sizes = this.batch.sizeStr.split(/[,，]/).map(x=>x.trim()).filter(Boolean);
+      if(!colors.length || !sizes.length){ return this.flash('颜色和尺码不能为空'); }
+      try {
+        const created = await api('/api/products/'+this.batch.product_id+'/skus/batch', {
+          method:'POST',
+          body: JSON.stringify({ colors, sizes, price:this.batch.price, cost:this.batch.cost,
+            quantity:this.batch.quantity, safety_stock:this.batch.safety_stock })
+        });
+        this.flash('生成了 '+created.length+' 个 SKU');
+      } catch(e){ this.flash(e.message); }
+    },
+
+    async scan(){
+      const code = this.scanInput.trim();
+      this.scanInput = '';
+      if(!code) return;
+      try {
+        const sku = await api('/api/skus/by-barcode/'+encodeURIComponent(code)+'?store='+encodeURIComponent(this.currentStore));
+        const exist = this.cart.find(c=> c.id===sku.id);
+        if(exist){ exist.qty += 1; } else { this.cart.push({...sku, qty:1}); }
+        this.checkoutRequestId = '';
+      } catch(e){ this.flash(e.message); }
+      this.$refs.scan.focus();
+    },
+    async checkout(){
+      if (this.checkingOut || !this.cart.length) return;
+      this.checkingOut = true;
+      if (!this.checkoutRequestId) this.checkoutRequestId = newRequestId('sale');
+      try {
+        const res = await api('/api/sales', { method:'POST',
+          body: JSON.stringify({
+            client_request_id: this.checkoutRequestId,
+            items: this.cart.map(c=>({ sku_id:c.id, qty:c.qty })),
+            store: this.currentStore,
+          }) });
+        this.flash('结算成功 '+res.order_no+'，合计 ¥'+res.total);
+        this.cart = []; this.checkoutRequestId = '';
+        this.$refs.scan.focus();
+      } catch(e){ this.flash(e.message); }
+      finally { this.checkingOut = false; }
+    },
+
+    // ---------- 账单流水 ----------
+    goOrders(){ this.tab='orders'; this.loadOrders(); },
+    fmtTime(iso){
+      if(!iso) return '-';
+      const d = new Date(iso);
+      const p = n => String(n).padStart(2,'0');
+      return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    },
+    resetOrderFilter(){
+      this.orderFilter = { store: this.isManager ? '' : this.currentStore, keyword:'', date_from:'', date_to:'' };
+      this.loadOrders();
+    },
+    async loadOrders(){
+      try {
+        const q = new URLSearchParams();
+        const f = this.orderFilter;
+        if(f.store) q.set('store', f.store);
+        if(f.keyword) q.set('keyword', f.keyword);
+        if(f.date_from) q.set('date_from', f.date_from);
+        if(f.date_to) q.set('date_to', f.date_to);
+        const res = await api('/api/orders?'+q);
+        this.orders = res.orders;
+        this.orderSummary = res.summary;
+      } catch(e){ this.flash(e.message); }
+    },
+    async openOrder(id){
+      try { this.orderDetail = await api('/api/orders/'+id); this.refundQty = {}; this.refundRequestId = ''; }
+      catch(e){ this.flash(e.message); }
+    },
+    async doRefund(){
+      if (this.refundSubmitting) return;
+      const o = this.orderDetail;
+      if(!o) return;
+      const items = [];
+      o.items.forEach((it, i) => {
+        const q = Number(this.refundQty[i]) || 0;
+        if(q > 0) items.push({ sku_id: it.sku_id, barcode: it.barcode, qty: q });
+      });
+      if(!items.length){ return this.flash('请填写要退的数量'); }
+      if (!this.refundRequestId) this.refundRequestId = newRequestId('refund');
+      this.refundSubmitting = true;
+      try {
+        const res = await api('/api/orders/'+o.id+'/refund', { method:'POST',
+          body: JSON.stringify({ items, store: this.currentStore, client_request_id:this.refundRequestId }) });
+        this.flash('退货成功，退款 ¥'+res.refund_total);
+        this.refundRequestId = '';
+        await this.openOrder(o.id);
+        this.loadOrders();
+      } catch(e){ this.flash(e.message); }
+      finally { this.refundSubmitting = false; }
+    },
+    printOrder(){
+      const o = this.orderDetail;
+      if(!o) return;
+      const rows = o.items.map(it =>
+        `<tr><td>${escapeHtml(it.product_name)} ${escapeHtml(it.color)}/${escapeHtml(it.size)}</td><td style="text-align:center">${escapeHtml(it.qty)}</td><td style="text-align:right">¥${escapeHtml(it.subtotal)}</td></tr>`
+      ).join('');
+      const w = window.open('');
+      w.document.write(`
+        <div style="font-family:monospace;width:280px;margin:0 auto;font-size:13px">
+          <h3 style="text-align:center;margin:6px 0">销售小票</h3>
+          <div>单号：${escapeHtml(o.order_no)}</div>
+          <div>时间：${escapeHtml(this.fmtTime(o.created_at))}</div>
+          <div>门店：${escapeHtml(o.store||'-')}　收银：${escapeHtml(o.operator||'-')}</div>
+          <hr>
+          <table style="width:100%;border-collapse:collapse">
+            <tr><th style="text-align:left">商品</th><th>数量</th><th style="text-align:right">小计</th></tr>
+            ${rows}
+          </table>
+          <hr>
+          <div style="text-align:right;font-size:15px;font-weight:700">合计：¥${escapeHtml(o.total)}</div>
+          <p style="text-align:center;margin-top:10px">谢谢惠顾</p>
+        </div>
+        <script>window.print();window.close();<\/script>`);
+    },
+  },
+  mounted(){
+    onUnauthorized = () => {
+      this.me = null;
+    };
+    document.addEventListener('pointerdown', this.handleStorePickerOutside);
+    this.fetchMe();
+  },
+  beforeUnmount(){
+    document.removeEventListener('pointerdown', this.handleStorePickerOutside);
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
