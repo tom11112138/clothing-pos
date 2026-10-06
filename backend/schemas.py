@@ -98,6 +98,7 @@ class TransferBatchReceiveItem(SQLModel):
 
 
 class TransferBatchReceive(SQLModel):
+    client_request_id: str = Field(min_length=16, max_length=80)
     items: List[TransferBatchReceiveItem] = Field(min_length=1, max_length=500)
     note: Optional[str] = Field(default=None, max_length=500)
 
@@ -108,11 +109,22 @@ class InventoryCountCreate(SQLModel):
 
 
 class InventoryCountLineUpdate(SQLModel):
+    expected_version: int = Field(ge=0)
     actual_qty: int = Field(ge=0)
 
 
 class InventoryCountFinish(SQLModel):
+    expected_version: int = Field(ge=0)
     note: Optional[str] = Field(default=None, max_length=500)
+
+
+class InventoryCountCompleteItem(SQLModel):
+    item_id: int = Field(gt=0)
+    actual_qty: int = Field(ge=0)
+
+
+class InventoryCountComplete(InventoryCountFinish):
+    items: List[InventoryCountCompleteItem] = Field(min_length=1)
 
 
 class SaleItem(SQLModel):

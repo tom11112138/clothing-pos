@@ -156,6 +156,9 @@ def _ensure_runtime_schema() -> None:
             ))
             conn.execute(text("create index if not exists ix_stocklog_count_id on stocklog(count_id)"))
             conn.execute(text(
+                "alter table inventorycount add column if not exists version integer not null default 0"
+            ))
+            conn.execute(text(
                 "create unique index if not exists ux_inventorycount_one_draft_per_store "
                 "on inventorycount(store) where status = 'draft'"
             ))
@@ -243,6 +246,9 @@ def _ensure_runtime_schema() -> None:
             if "count_id" not in log_names:
                 conn.execute(text("alter table stocklog add column count_id integer"))
             conn.execute(text("create index if not exists ix_stocklog_count_id on stocklog(count_id)"))
+            count_columns = conn.execute(text("pragma table_info(inventorycount)")).fetchall()
+            if "version" not in {row[1] for row in count_columns}:
+                conn.execute(text("alter table inventorycount add column version integer not null default 0"))
             conn.execute(text(
                 "create unique index if not exists ux_inventorycount_one_draft_per_store "
                 "on inventorycount(store) where status = 'draft'"

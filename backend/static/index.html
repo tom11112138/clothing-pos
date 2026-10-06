@@ -287,7 +287,7 @@
       <label>密码</label>
       <input v-model="loginForm.password" @keyup.enter="login" type="password" placeholder="密码" />
       <div class="login-err" v-if="loginError">{{ loginError }}</div>
-      <button class="btn login-btn" @click="login" :disabled="loggingIn">{{ loggingIn ? '登录中…' : '登 录' }}</button>
+      <button class="btn login-btn" @click="login" :disabled="loggingIn || loggingOut">{{ loggingOut ? '退出中…' : loggingIn ? '登录中…' : '登 录' }}</button>
     </div>
   </div>
 
@@ -340,8 +340,8 @@
               type="button"
               class="store-trigger"
               :class="{ open: storeMenuOpen }"
-              :disabled="!isManager"
-              :title="isManager ? '切换当前门店' : '店员账号固定所属门店'"
+              :disabled="!isManager || checkingOut || pendingScans > 0"
+              :title="!isManager ? '店员账号固定所属门店' : cart.length ? '请先结算或清空购物车再切换门店' : '切换当前门店'"
               aria-haspopup="listbox"
               :aria-expanded="storeMenuOpen"
               @click="toggleStoreMenu"
@@ -381,7 +381,7 @@
           <div class="user-chip" v-if="me">
             <span class="who">{{ me.name || me.username }}</span>
             <span class="role-tag" :class="me.role">{{ me.role==='manager' ? '店长' : '店员' }}</span>
-            <button class="btn ghost sm" @click="logout">登出</button>
+            <button class="btn ghost sm" @click="logout" :disabled="checkingOut || loggingOut">登出</button>
           </div>
         </div>
       </div>
@@ -469,8 +469,8 @@
                     <td>{{ t.created_by }}</td>
                     <td>{{ fmtTime(t.created_at) }}</td>
                     <td style="text-align:right">
-                      <div class="actions" style="justify-content:flex-end" v-if="t.status==='shipped' || t.status==='partial'">
-                        <button class="btn sm" @click="openBatchReceive(t)">录入收货</button>
+                      <div class="actions" style="justify-content:flex-end" v-if="t.status==='shipped' || t.status==='partial' || hasPendingBatchReceive(t.id)">
+                        <button class="btn sm" @click="openBatchReceive(t)">{{ hasPendingBatchReceive(t.id) ? '确认上次收货' : '录入收货' }}</button>
                         <button v-if="t.status==='shipped'" class="btn sm ghost" @click="cancelTransferBatch(t)">取消调拨</button>
                       </div>
                     </td>
@@ -485,7 +485,7 @@
             <div class="row">
               <div class="field"><label>盘点门店</label><select v-model="countStore" style="width:150px"><option v-for="s in stores" :key="s" :value="s">{{ s }}</option></select></div>
               <div class="field" style="flex:1;min-width:180px"><label>备注</label><input v-model="countNote" placeholder="如：月末盘点" /></div>
-              <button class="btn" @click="startInventoryCount">新建盘点单</button>
+              <button class="btn" @click="startInventoryCount" :disabled="countSubmitting || countLoading">新建盘点单</button>
             </div>
             <div class="table-wrap" v-if="counts.length" style="margin-top:14px"><table><thead><tr><th>盘点单号</th><th>门店</th><th>录入进度</th><th>状态</th><th>创建人</th><th>时间</th><th style="text-align:right">操作</th></tr></thead><tbody>
               <tr v-for="c in counts" :key="c.id"><td class="code-cell strong">{{ c.count_no }}</td><td>{{ c.store }}</td><td>{{ c.entered_count }} / {{ c.item_count }}</td><td><span class="status-tag" :class="c.status">{{ {draft:'盘点中',completed:'已完成',cancelled:'已取消'}[c.status] }}</span></td><td>{{ c.created_by }}</td><td>{{ fmtTime(c.created_at) }}</td><td style="text-align:right"><div class="actions" style="justify-content:flex-end"><button class="btn sm ghost" @click="openInventoryCount(c.id)">查看/录入</button><button v-if="c.status==='draft'" class="btn sm danger-ghost" @click="cancelInventoryCount(c)">取消</button></div></td></tr>
@@ -554,8 +554,9 @@
         <template v-if="tab==='pos'">
           <div class="card">
             <div class="card-head"><h2>扫码收银</h2></div>
-            <input ref="scan" class="scan-box" v-model="scanInput" @keyup.enter="scan"
+            <input ref="scan" class="scan-box" v-model="scanInput" @keyup.enter="scan" :disabled="checkingOut"
                    placeholder="扫描条码 或 手动输入条码后回车" />
+            <p v-if="pendingScans" class="muted" role="status">正在查询 {{ pendingScans }} 个条码</p>
             <p class="muted" style="margin:12px 0 0">USB 扫描枪即插即用：它本质是键盘，扫一下会自动输入条码并回车。</p>
           </div>
           <div class="card">
@@ -564,14 +565,14 @@
               <table>
                 <thead><tr><th>商品</th><th>颜色 / 尺码</th><th>条码</th><th>单价</th><th>数量</th><th>小计</th><th></th></tr></thead>
                 <tbody>
-                  <tr v-for="(c,i) in cart" :key="c.id">
+                  <tr v-for="c in cart" :key="c.id">
                     <td class="strong">{{ c.product_name }}</td>
                     <td>{{ c.color }}/{{ c.size }}</td>
                     <td class="code-cell">{{ c.barcode }}</td>
                     <td class="price">¥{{ c.price }}</td>
-                    <td><input class="qty-in" type="number" min="1" v-model.number="c.qty" /></td>
+                    <td><input class="qty-in" type="number" min="1" step="1" :value="c.qty" @change="setCartQty(c.id, $event)" :disabled="checkingOut || pendingScans > 0" /></td>
                     <td class="price strong">¥{{ (c.price*c.qty).toFixed(2) }}</td>
-                    <td style="text-align:right"><button class="btn sm danger-ghost" @click="cart.splice(i,1)">移除</button></td>
+                    <td style="text-align:right"><button class="btn sm danger-ghost" @click="removeCartItem(c.id)" :disabled="checkingOut || pendingScans > 0">移除</button></td>
                   </tr>
                 </tbody>
               </table>
@@ -583,8 +584,8 @@
             <div class="checkout-bar">
               <div><span class="total-label">合计</span><span class="total">¥{{ cartTotal }}</span></div>
               <div class="actions">
-                <button class="btn ghost" @click="cart=[]" :disabled="!cart.length">清空</button>
-                <button class="btn" @click="checkout" :disabled="!cart.length || checkingOut">{{ checkingOut ? '结算中...' : '结算扣库存' }}</button>
+                <button class="btn ghost" @click="clearCart" :disabled="checkingOut || (!cart.length && !pendingScans && !scanInput)">清空</button>
+                <button class="btn" @click="checkout" :disabled="!cart.length || checkingOut || pendingScans > 0">{{ checkingOut ? '结算中...' : pendingScans ? '条码查询中...' : '结算扣库存' }}</button>
               </div>
             </div>
           </div>
@@ -725,25 +726,27 @@
     </div>
   </div>
 
-  <div class="modal-mask" v-if="batchReceive" @click.self="batchReceive=null">
+  <div class="modal-mask" v-if="me && batchReceive && batchReceiveOwnerId===me.id" @click.self="closeBatchReceive">
     <div class="modal" style="max-width:760px">
-      <div class="modal-title">录入收货 · {{ batchReceive.transfer_no }}</div>
+      <div class="modal-title">{{ batchReceiveRequest ? '收货待确认' : '录入收货' }} · {{ batchReceive.transfer_no }}</div>
       <div class="modal-desc">只填写本次实际到货或拒收数量；未填写的商品继续保持在途。</div>
       <div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>商品</th><th>已发</th><th>已收</th><th>拒收</th><th>在途</th><th>本次实收</th><th>本次拒收</th></tr></thead><tbody>
-        <tr v-for="item in batchReceive.items" :key="item.id"><td>{{ item.product_name }} {{ item.color || '-' }}/{{ item.size || '-' }}</td><td>{{ item.qty }}</td><td>{{ item.received_qty }}</td><td>{{ item.rejected_qty }}</td><td>{{ item.remaining_qty }}</td><td><input class="qty-in" type="number" min="0" :max="item.remaining_qty" v-model.number="batchReceiveValues[item.id].received_qty" /></td><td><input class="qty-in" type="number" min="0" :max="item.remaining_qty" v-model.number="batchReceiveValues[item.id].rejected_qty" /></td></tr>
+        <tr v-for="item in batchReceive.items" :key="item.id"><td>{{ item.product_name }} {{ item.color || '-' }}/{{ item.size || '-' }}</td><td>{{ item.qty }}</td><td>{{ item.received_qty }}</td><td>{{ item.rejected_qty }}</td><td>{{ item.remaining_qty }}</td><td><input class="qty-in" type="number" min="0" :max="item.remaining_qty" :disabled="batchReceiveSubmitting || !!batchReceiveRequest" v-model.number="batchReceiveValues[item.id].received_qty" /></td><td><input class="qty-in" type="number" min="0" :max="item.remaining_qty" :disabled="batchReceiveSubmitting || !!batchReceiveRequest" v-model.number="batchReceiveValues[item.id].rejected_qty" /></td></tr>
       </tbody></table></div>
-      <div class="modal-actions"><button class="btn ghost" @click="batchReceive=null">取消</button><button class="btn" :disabled="batchReceiveSubmitting" @click="submitBatchReceive">{{ batchReceiveSubmitting ? '保存中...' : '保存本次收货' }}</button></div>
+      <div v-if="batchReceiveError" class="login-err" role="alert">{{ batchReceiveError }}</div>
+      <div class="modal-actions"><button class="btn ghost" :disabled="batchReceiveSubmitting" @click="closeBatchReceive">关闭</button><button class="btn" :disabled="batchReceiveSubmitting" @click="submitBatchReceive">{{ batchReceiveSubmitting ? '保存中...' : (batchReceiveRequest ? '重试确认' : '保存本次收货') }}</button></div>
     </div>
   </div>
 
-  <div class="modal-mask" v-if="countDetail" @click.self="countDetail=null">
+  <div class="modal-mask" v-if="me && isManager && countDetail" @click.self="closeInventoryCount">
     <div class="modal" style="max-width:900px">
       <div class="modal-title">盘点单 · {{ countDetail.count_no }}</div>
       <div class="modal-desc">{{ countDetail.store }} · 系统数是建单快照；完成时会验证库存未在期间变化。</div>
       <div class="table-wrap" style="margin-top:14px;max-height:430px"><table><thead><tr><th>商品</th><th>规格</th><th>条码</th><th>系统数</th><th>实盘数</th><th>差异</th></tr></thead><tbody>
-        <tr v-for="item in countDetail.items" :key="item.id"><td>{{ item.product_name }}<div class="code-cell">{{ item.product_code }}</div></td><td>{{ item.color || '-' }} / {{ item.size || '-' }}</td><td class="code-cell">{{ item.barcode }}</td><td>{{ item.system_qty }}</td><td><input class="qty-in" type="number" min="0" v-model.number="countActual[item.id]" :disabled="countDetail.status!=='draft'" /></td><td :class="{danger: countDifference(item)!==0}">{{ countDifference(item) }}</td></tr>
+        <tr v-for="item in countDetail.items" :key="item.id"><td>{{ item.product_name }}<div class="code-cell">{{ item.product_code }}</div></td><td>{{ item.color || '-' }} / {{ item.size || '-' }}</td><td class="code-cell">{{ item.barcode }}</td><td>{{ item.system_qty }}</td><td><input class="qty-in" type="number" min="0" step="1" v-model.number="countActual[item.id]" :disabled="countDetail.status!=='draft' || countSubmitting || countLoading || countReloadRequired" /></td><td :class="{danger: countDifference(item)!==0}">{{ countDifference(item) }}</td></tr>
       </tbody></table></div>
-      <div class="modal-actions"><button class="btn ghost" @click="countDetail=null">关闭</button><button v-if="countDetail.status==='draft'" class="btn" @click="completeInventoryCount">保存并完成盘点</button></div>
+      <div v-if="countError" class="login-err" role="alert">{{ countError }}</div>
+      <div class="modal-actions"><button class="btn ghost" @click="closeInventoryCount" :disabled="countSubmitting">关闭</button><button v-if="countError" class="btn ghost" @click="reloadInventoryCount" :disabled="countSubmitting || countLoading">重新加载</button><button v-if="countDetail.status==='draft'" class="btn" @click="completeInventoryCount" :disabled="countSubmitting || countLoading || countReloadRequired">{{ countSubmitting ? '提交中...' : '保存并完成盘点' }}</button></div>
     </div>
   </div>
 
@@ -824,6 +827,7 @@
 const { createApp } = Vue;
 localStorage.removeItem('pos_token');
 let onUnauthorized = () => {};
+let authVersion = 0;
 const readCookie = name => document.cookie.split('; ').find(v => v.startsWith(name+'='))?.split('=').slice(1).join('=') || '';
 const newRequestId = prefix => prefix + '-' + ((typeof crypto !== 'undefined' && crypto.randomUUID)
   ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2)));
@@ -831,6 +835,7 @@ const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, ch => ({
   '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;'
 }[ch]));
 const api = async (url, opt={}) => {
+  const requestAuthVersion = authVersion;
   const headers = { 'Content-Type':'application/json', ...(opt.headers||{}) };
   const method = (opt.method || 'GET').toUpperCase();
   if (!['GET','HEAD','OPTIONS'].includes(method)) {
@@ -838,8 +843,11 @@ const api = async (url, opt={}) => {
     if (csrf) headers['X-CSRF-Token'] = decodeURIComponent(csrf);
   }
   const r = await fetch(url, { ...opt, headers, credentials:'same-origin' });
-  if (r.status === 401) { onUnauthorized(); throw new Error('登录已过期，请重新登录'); }
-  if (!r.ok) { const e = await r.json().catch(()=>({detail:'请求失败'})); throw new Error(e.detail || '请求失败'); }
+  if (r.status === 401) {
+    if (requestAuthVersion === authVersion) onUnauthorized();
+    throw Object.assign(new Error('登录已过期，请重新登录'), { status:r.status });
+  }
+  if (!r.ok) { const e = await r.json().catch(()=>({detail:'请求失败'})); throw Object.assign(new Error(e.detail || '请求失败'), { status:r.status }); }
   return r.json();
 };
 
@@ -856,7 +864,7 @@ createApp({
       storeMenuOpen: false, storeMenuIndex: 0,
       // 鉴权
       me: null,
-      loginForm: { username: '', password: '' }, loginError: '', loggingIn: false,
+      loginForm: { username: '', password: '' }, loginError: '', loggingIn: false, loggingOut: false,
       // 账号管理
       users: [], newUser: { username:'', password:'', name:'', role:'staff', store:'' },
       // 退货（订单明细内每行的退货数量）
@@ -864,22 +872,38 @@ createApp({
       // 库存
       skus: [], transfers: [], transferDraft: [], transferTarget: '', transferNote: '', transferRequestId: '', transferSubmitting: false, transferBatches: [], batchReceive: null, batchReceiveValues: {}, batchReceiveSubmitting: false, counts: [], countStore: STORES[0], countNote: '', countDetail: null, countActual: {}, stockKeyword: '', lowOnly: false, includeInactive: false,
       stockStore: localStorage.getItem('pos_store') || STORES[0],
+      batchReceiveRequest: null, batchReceiveOwnerId: null, batchReceiveError: '',
+      countSubmitting: false, countLoading: false, countError: '', countReloadRequired: false, countViewVersion: 0,
       // 商品
       products: [],
       np: { code:'', name:'', category:'', brand:'', tag_price:0 },
       batch: { product_id:null, colorStr:'', sizeStr:'', price:0, cost:0, quantity:0, safety_stock:0 },
       // 收银
       scanInput: '', cart: [], checkingOut: false, checkoutRequestId: '', moveSubmitting: false,
+      posVersion: 0, pendingScans: 0,
       // 账单流水
       orders: [], orderSummary: { count:0, item_count:0, total:0 }, orderDetail: null, refundRequestId: '', refundSubmitting: false, confirmRunning: false,
       orderFilter: { store:'', keyword:'', date_from:'', date_to:'' },
     };
   },
   watch: {
-    currentStore(v) {
-      localStorage.setItem('pos_store', v);
-      if (this.stockStore !== 'all') this.stockStore = v;
-      if (this.tab === 'stock') this.loadStock();
+    me: {
+      flush: 'sync',
+      handler() {
+        authVersion += 1;
+        this.resetPos();
+        this.resetCountView();
+        this.closeStoreMenu();
+      },
+    },
+    currentStore: {
+      flush: 'sync',
+      handler(v) {
+        this.resetPos();
+        localStorage.setItem('pos_store', v);
+        if (this.stockStore !== 'all') this.stockStore = v;
+        if (this.tab === 'stock') this.loadStock();
+      },
     },
     stockStore(v) {
       if (this.transferDraft.length) this.transferDraft = [];
@@ -925,11 +949,11 @@ createApp({
 
     // ---------- 门店选择 ----------
     toggleStoreMenu(){
-      if (!this.isManager) return;
+      if (!this.isManager || this.checkingOut || this.pendingScans) return;
       this.storeMenuOpen ? this.closeStoreMenu() : this.openStoreMenu();
     },
     openStoreMenu(){
-      if (!this.isManager) return;
+      if (!this.isManager || this.checkingOut || this.pendingScans) return;
       const currentIndex = this.stores.indexOf(this.currentStore);
       this.storeMenuIndex = currentIndex >= 0 ? currentIndex : 0;
       this.storeMenuOpen = true;
@@ -952,6 +976,10 @@ createApp({
     },
     selectCurrentStore(store){
       if (!this.isManager || !this.stores.includes(store)) return;
+      if (store !== this.currentStore && (this.cart.length || this.pendingScans || this.checkingOut)) {
+        this.closeStoreMenu();
+        return this.flash('请先完成条码查询，并结算或清空购物车后再切换门店');
+      }
       this.currentStore = store;
       this.closeStoreMenu(true);
     },
@@ -961,10 +989,13 @@ createApp({
 
     // ---------- 鉴权 ----------
     async login(){
+      if (this.loggingIn || this.loggingOut) return;
       if(!this.loginForm.username || !this.loginForm.password){ this.loginError='请输入用户名和密码'; return; }
       this.loggingIn = true; this.loginError = '';
+      const version = authVersion;
       try {
         const res = await api('/api/auth/login', { method:'POST', body: JSON.stringify(this.loginForm) });
+        if (version !== authVersion) return;
         this.me = res.user;
         if (this.me.store) this.currentStore = this.me.store;
         if (!this.isManager) this.orderFilter.store = this.currentStore;
@@ -974,13 +1005,19 @@ createApp({
       finally { this.loggingIn = false; }
     },
     async logout(){
-      try { await api('/api/auth/logout', { method:'POST' }); } catch(e){}
-      this.closeStoreMenu();
+      if (this.loggingOut) return;
+      if (this.checkingOut) return this.flash('正在结算，请等待结算完成后再退出');
+      this.loggingOut = true;
       this.me = null;
+      try { await api('/api/auth/logout', { method:'POST' }); } catch(e){}
+      finally { this.loggingOut = false; }
     },
     async fetchMe(){
+      const version = authVersion;
       try {
-        this.me = await api('/api/auth/me');
+        const user = await api('/api/auth/me');
+        if (version !== authVersion || this.loggingOut) return;
+        this.me = user;
         if (this.me.store) this.currentStore = this.me.store;
         if (!this.isManager) this.orderFilter.store = this.currentStore;
         this.loadStock();
@@ -1135,25 +1172,96 @@ createApp({
       try { this.transferBatches = await api('/api/stock/transfer-batches'); }
       catch(e){ this.flash(e.message); }
     },
+    batchReceiveStorageKey(batchId, userId=this.me?.id){
+      return `pos_batch_receive_${userId}_${batchId}`;
+    },
+    hasPendingBatchReceive(batchId){
+      if (!this.isManager) return false;
+      try { return !!sessionStorage.getItem(this.batchReceiveStorageKey(batchId)); }
+      catch(e){ return false; }
+    },
     openBatchReceive(batch){
-      this.batchReceive = batch;
+      if (this.batchReceiveSubmitting || !this.isManager) return;
+      try {
+        const raw = sessionStorage.getItem(this.batchReceiveStorageKey(batch.id));
+        const saved = raw ? JSON.parse(raw) : null;
+        if (saved && (saved.userId !== this.me.id || saved.batchId !== batch.id
+            || saved.batch?.id !== batch.id || !Array.isArray(saved.batch?.items)
+            || !Array.isArray(saved.body?.items) || !saved.body?.client_request_id)) {
+          throw new Error('未确认的收货记录无法读取，请先核对该调拨单');
+        }
+        this.batchReceiveOwnerId = this.me.id;
+        this.batchReceiveRequest = saved;
+        this.batchReceive = saved ? saved.batch : batch;
+        this.batchReceiveError = '';
+        this.batchReceiveValues = {};
+        this.batchReceive.items.forEach(item => {
+          const previous = saved?.body.items.find(row => row.item_id === item.id);
+          this.batchReceiveValues[item.id] = {
+            received_qty:previous?.received_qty || 0, rejected_qty:previous?.rejected_qty || 0,
+          };
+        });
+      } catch(e){ this.flash(e.message || '浏览器无法读取收货记录，请检查存储设置'); }
+    },
+    closeBatchReceive(){
+      if (this.batchReceiveSubmitting) return;
+      this.batchReceive = null;
       this.batchReceiveValues = {};
-      batch.items.forEach(item => { this.batchReceiveValues[item.id] = { received_qty:0, rejected_qty:0 }; });
+      this.batchReceiveRequest = null;
+      this.batchReceiveOwnerId = null;
+      this.batchReceiveError = '';
     },
     async submitBatchReceive(){
-      if (this.batchReceiveSubmitting) return;
-      const items = this.batchReceive.items.map(item => ({
-        item_id:item.id,
-        received_qty:Number(this.batchReceiveValues[item.id].received_qty) || 0,
-        rejected_qty:Number(this.batchReceiveValues[item.id].rejected_qty) || 0,
-      })).filter(item => item.received_qty || item.rejected_qty);
-      if (!items.length) return this.flash('请填写至少一项实收或拒收数量');
+      if (this.batchReceiveSubmitting || !this.batchReceive || !this.isManager
+          || this.batchReceiveOwnerId !== this.me.id) return;
+      const storageKey = this.batchReceiveStorageKey(this.batchReceive.id);
+      if (!this.batchReceiveRequest) {
+        const rows = this.batchReceive.items.map(item => ({
+          item_id:item.id,
+          received_qty:Number(this.batchReceiveValues[item.id].received_qty),
+          rejected_qty:Number(this.batchReceiveValues[item.id].rejected_qty),
+        }));
+        if (rows.some((row, index) => !Number.isSafeInteger(row.received_qty) || !Number.isSafeInteger(row.rejected_qty)
+            || row.received_qty < 0 || row.rejected_qty < 0
+            || row.received_qty + row.rejected_qty > this.batchReceive.items[index].remaining_qty)) {
+          return this.flash('实收和拒收须为非负整数，合计不能超过在途数量');
+        }
+        const items = rows.filter(item => item.received_qty || item.rejected_qty);
+        if (!items.length) return this.flash('请填写至少一项实收或拒收数量');
+        const pending = {
+          userId:this.me.id, batchId:this.batchReceive.id, batch:this.batchReceive,
+          body:{ items, client_request_id:newRequestId('receipt') },
+        };
+        // Persist before sending so a lost response or reload keeps the same operation.
+        try { sessionStorage.setItem(storageKey, JSON.stringify(pending)); }
+        catch(e){ return this.flash('无法保存待确认收货，本次未提交，请检查浏览器存储设置'); }
+        this.batchReceiveRequest = pending;
+      }
+      const pending = this.batchReceiveRequest;
       this.batchReceiveSubmitting = true;
+      this.batchReceiveError = '';
       try {
-        await api('/api/stock/transfer-batches/'+this.batchReceive.id+'/receive', {method:'POST', body:JSON.stringify({items})});
-        this.flash('本次收货已保存'); this.batchReceive = null; this.loadStock();
-      } catch(e){ this.flash(e.message); }
-      finally { this.batchReceiveSubmitting = false; }
+        const result = await api('/api/stock/transfer-batches/'+pending.batchId+'/receive', {
+          method:'POST', body:JSON.stringify(pending.body),
+        });
+        sessionStorage.removeItem(storageKey);
+        if (this.me?.id === pending.userId && this.batchReceiveOwnerId === pending.userId) {
+          this.batchReceiveSubmitting = false;
+          this.closeBatchReceive();
+          this.flash(result.duplicate ? '已确认上次收货，库存未重复增加' : '本次收货已保存');
+          this.loadStock();
+        }
+      } catch(e){
+        // Only definitive validation failures allow editing; unknown outcomes retain the snapshot.
+        if ([400, 422].includes(e.status)) {
+          try {
+            sessionStorage.removeItem(storageKey);
+            this.batchReceiveRequest = null;
+          } catch(storageError) { /* Keep the existing request until it can be reconciled. */ }
+        }
+        this.batchReceiveError = this.batchReceiveRequest ? '收货结果待确认，请重试确认。' + e.message : e.message;
+        this.flash(this.batchReceiveError);
+      } finally { this.batchReceiveSubmitting = false; }
     },
     cancelTransferBatch(batch){
       this.confirmBox = { title:`取消调拨单 ${batch.transfer_no}？`, desc:'仅未收货的调拨单可以取消，货物会退回调出门店。', okText:'取消调拨', danger:true,
@@ -1161,41 +1269,106 @@ createApp({
       };
     },
     async loadCounts(){
-      try { this.counts = await api('/api/stock/counts'); }
-      catch(e){ this.flash(e.message); }
+      const owner = authVersion;
+      try {
+        const counts = await api('/api/stock/counts');
+        if (owner === authVersion && this.isManager) this.counts = counts;
+      } catch(e){ if (owner === authVersion) this.flash(e.message); }
+    },
+    resetCountView(){
+      this.countViewVersion += 1;
+      this.countDetail = null; this.countActual = {}; this.counts = [];
+      this.countSubmitting = false; this.countLoading = false;
+      this.countError = ''; this.countReloadRequired = false;
+    },
+    closeInventoryCount(){
+      if (this.countSubmitting) return;
+      this.countViewVersion += 1;
+      this.countDetail = null; this.countActual = {}; this.countLoading = false;
+      this.countError = ''; this.countReloadRequired = false;
     },
     async startInventoryCount(){
+      if (!this.isManager || this.countSubmitting || this.countLoading) return;
+      const owner = authVersion, view = ++this.countViewVersion;
+      this.countLoading = true;
       try {
         const result = await api('/api/stock/counts', {method:'POST', body:JSON.stringify({store:this.countStore, note:this.countNote || null})});
+        if (owner !== authVersion || view !== this.countViewVersion) return;
         this.countNote = ''; this.flash('盘点单已创建'); this.openCountData(result.count); this.loadCounts();
-      } catch(e){ this.flash(e.message); }
+      } catch(e){ if (owner === authVersion && view === this.countViewVersion) this.flash(e.message); }
+      finally { if (owner === authVersion && view === this.countViewVersion) this.countLoading = false; }
     },
     async openInventoryCount(countId){
-      try { this.openCountData(await api('/api/stock/counts/'+countId)); }
-      catch(e){ this.flash(e.message); }
+      if (!this.isManager || this.countSubmitting) return;
+      const owner = authVersion, view = ++this.countViewVersion;
+      this.countLoading = true;
+      try {
+        const count = await api('/api/stock/counts/'+countId);
+        if (owner === authVersion && view === this.countViewVersion) this.openCountData(count);
+      } catch(e){ if (owner === authVersion && view === this.countViewVersion) this.flash(e.message); }
+      finally { if (owner === authVersion && view === this.countViewVersion) this.countLoading = false; }
     },
     openCountData(count){
       this.countDetail = count; this.countActual = {};
+      this.countError = ''; this.countReloadRequired = false;
       count.items.forEach(item => { this.countActual[item.id] = item.actual_qty; });
+    },
+    reloadInventoryCount(){
+      if (!this.countDetail || this.countSubmitting || this.countLoading) return;
+      const countId = this.countDetail.id, owner = authVersion, view = this.countViewVersion;
+      this.confirmBox = { title:'重新加载盘点单？', desc:'将以服务器记录替换当前未提交的实盘数。', okText:'重新加载',
+        onOk: async () => {
+          if (owner === authVersion && view === this.countViewVersion) await this.openInventoryCount(countId);
+        },
+      };
     },
     countDifference(item){
       const actual = this.countActual[item.id];
       return actual === null || actual === undefined || actual === '' ? '-' : Number(actual) - item.system_qty;
     },
     async completeInventoryCount(){
+      if (!this.isManager || !this.countDetail || this.countDetail.status !== 'draft'
+          || this.countSubmitting || this.countLoading || this.countReloadRequired) return;
       const missing = this.countDetail.items.filter(item => this.countActual[item.id] === null || this.countActual[item.id] === undefined || this.countActual[item.id] === '');
       if (missing.length) return this.flash(`还有 ${missing.length} 个商品未填写实盘数`);
+      const items = this.countDetail.items.map(item => ({item_id:item.id, actual_qty:Number(this.countActual[item.id])}));
+      if (!items.length || items.some(item => !Number.isSafeInteger(item.actual_qty) || item.actual_qty < 0)) {
+        return this.flash('实盘数必须是非负整数，且盘点单不能为空');
+      }
+      const countId = this.countDetail.id, owner = authVersion, view = this.countViewVersion;
+      const body = {expected_version:this.countDetail.version, items};
+      this.countSubmitting = true; this.countError = '';
       try {
-        for (const item of this.countDetail.items) {
-          await api('/api/stock/counts/'+this.countDetail.id+'/items/'+item.id, {method:'PUT', body:JSON.stringify({actual_qty:Number(this.countActual[item.id])})});
-        }
-        const result = await api('/api/stock/counts/'+this.countDetail.id+'/complete', {method:'POST', body:JSON.stringify({})});
+        const result = await api('/api/stock/counts/'+countId+'/complete', {method:'POST', body:JSON.stringify(body)});
+        if (owner !== authVersion || view !== this.countViewVersion) return;
         this.openCountData(result.count); this.flash('盘点完成，差异已记入库存流水'); this.loadStock();
-      } catch(e){ this.flash(e.message); }
+      } catch(e){
+        if (owner === authVersion && view === this.countViewVersion) {
+          this.countReloadRequired = e.status === 409;
+          this.countError = e.status && e.status < 500 ? e.message : '提交结果待确认，请重试或重新加载核对。' + e.message;
+          this.flash(this.countError);
+        }
+      } finally { if (owner === authVersion && view === this.countViewVersion) this.countSubmitting = false; }
     },
     cancelInventoryCount(count){
+      if (!this.isManager || this.countSubmitting || this.countLoading || count.status !== 'draft') return;
+      const owner = authVersion, countId = count.id, expectedVersion = count.version;
       this.confirmBox = { title:`取消盘点单 ${count.count_no}？`, desc:'取消不会修改库存，之后可以重新建立盘点单。', okText:'取消盘点', danger:true,
-        onOk: async () => { await api('/api/stock/counts/'+count.id+'/cancel', {method:'POST', body:JSON.stringify({})}); this.flash('盘点单已取消'); this.loadCounts(); },
+        onOk: async () => {
+          if (owner !== authVersion || !this.isManager || this.countSubmitting || this.countLoading) return;
+          this.countSubmitting = true;
+          try {
+            const result = await api('/api/stock/counts/'+countId+'/cancel', {method:'POST', body:JSON.stringify({expected_version:expectedVersion})});
+            if (owner !== authVersion) return;
+            if (this.countDetail?.id === countId) this.openCountData(result.count);
+            this.flash('盘点单已取消'); this.loadCounts();
+          } catch(e){
+            if (owner === authVersion) {
+              if (this.countDetail?.id === countId) { this.countError = e.message; this.countReloadRequired = e.status === 409; }
+              this.flash(e.message); this.loadCounts();
+            }
+          } finally { if (owner === authVersion) this.countSubmitting = false; }
+        },
       };
     },
     receiveTransfer(t){
@@ -1297,34 +1470,90 @@ createApp({
       } catch(e){ this.flash(e.message); }
     },
 
+    resetPos(){
+      // Invalidate callbacks from an older cart, store, or login session.
+      this.posVersion += 1;
+      this.cart = []; this.scanInput = ''; this.pendingScans = 0;
+      this.checkingOut = false; this.checkoutRequestId = '';
+    },
+    posContext(){
+      return { version:this.posVersion, userId:this.me?.id, store:this.currentStore };
+    },
+    isCurrentPos(context){
+      return !!this.me && context.version === this.posVersion &&
+        context.userId === this.me.id && context.store === this.currentStore;
+    },
+    focusScan(){
+      if (this.me && this.tab === 'pos' && !this.checkingOut) this.$nextTick(()=>this.$refs.scan?.focus());
+    },
+    clearCart(){
+      if (this.checkingOut) return;
+      this.resetPos();
+      this.focusScan();
+    },
+    removeCartItem(skuId){
+      if (this.checkingOut || this.pendingScans) return;
+      this.cart = this.cart.filter(item => item.id !== skuId);
+    },
+    setCartQty(skuId, event){
+      const item = this.cart.find(c => c.id === skuId);
+      if (!item) return;
+      const qty = Number(event.target.value);
+      if (this.checkingOut || this.pendingScans || !Number.isSafeInteger(qty) || qty <= 0) {
+        event.target.value = item.qty;
+        return;
+      }
+      item.qty = qty;
+    },
     async scan(){
+      if (!this.me || this.loggingOut) return;
+      if (this.checkingOut) return this.flash('正在结算，请完成后再扫描下一单');
       const code = this.scanInput.trim();
       this.scanInput = '';
       if(!code) return;
+      const context = this.posContext();
+      this.pendingScans += 1;
       try {
-        const sku = await api('/api/skus/by-barcode/'+encodeURIComponent(code)+'?store='+encodeURIComponent(this.currentStore));
+        const sku = await api('/api/skus/by-barcode/'+encodeURIComponent(code)+'?store='+encodeURIComponent(context.store));
+        if (!this.isCurrentPos(context)) return;
         const exist = this.cart.find(c=> c.id===sku.id);
         if(exist){ exist.qty += 1; } else { this.cart.push({...sku, qty:1}); }
         this.checkoutRequestId = '';
-      } catch(e){ this.flash(e.message); }
-      this.$refs.scan.focus();
+      } catch(e){ if (this.isCurrentPos(context)) this.flash(e.message); }
+      finally {
+        if (this.isCurrentPos(context)) {
+          this.pendingScans -= 1;
+          this.focusScan();
+        }
+      }
     },
     async checkout(){
-      if (this.checkingOut || !this.cart.length) return;
+      if (!this.me || this.loggingOut || this.checkingOut || !this.cart.length) return;
+      if (this.pendingScans) return this.flash('条码仍在查询中，请稍后结算');
+      if (this.scanInput.trim()) return this.flash('条码尚未加入购物车，请先完成扫码或清空输入');
+      if (this.cart.some(c => !Number.isSafeInteger(c.qty) || c.qty <= 0)) return this.flash('商品数量必须是正整数');
+      const context = this.posContext();
       this.checkingOut = true;
+      this.closeStoreMenu();
       if (!this.checkoutRequestId) this.checkoutRequestId = newRequestId('sale');
       try {
         const res = await api('/api/sales', { method:'POST',
           body: JSON.stringify({
             client_request_id: this.checkoutRequestId,
             items: this.cart.map(c=>({ sku_id:c.id, qty:c.qty })),
-            store: this.currentStore,
+            store: context.store,
           }) });
+        if (!this.isCurrentPos(context)) return;
         this.flash('结算成功 '+res.order_no+'，合计 ¥'+res.total);
-        this.cart = []; this.checkoutRequestId = '';
-        this.$refs.scan.focus();
-      } catch(e){ this.flash(e.message); }
-      finally { this.checkingOut = false; }
+        this.resetPos();
+        this.focusScan();
+      } catch(e){ if (this.isCurrentPos(context)) this.flash(e.message); }
+      finally {
+        if (this.isCurrentPos(context)) {
+          this.checkingOut = false;
+          this.focusScan();
+        }
+      }
     },
 
     // ---------- 账单流水 ----------

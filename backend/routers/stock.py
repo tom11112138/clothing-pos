@@ -11,8 +11,8 @@ from sqlmodel import Session, select
 from database import DEFAULT_STORES, get_session
 from models import (Inventory, InventoryCount, InventoryCountItem, Product, SalesOrder,
                     SalesOrderItem, Sku, StockLog, StockTransfer as TransferOrder,
-                    StockTransferBatch, StockTransferItem, User)
-from schemas import (InventoryCountCreate, InventoryCountFinish, InventoryCountLineUpdate,
+                    StockTransferBatch, StockTransferItem, StockTransferReceipt, User)
+from schemas import (InventoryCountComplete, InventoryCountCreate, InventoryCountFinish, InventoryCountLineUpdate,
                      SaleCreate, StockMove, StockTransfer as StockTransferCreate,
                      TransferBatchCreate, TransferBatchReceive, TransferCancel, TransferReceive)
 from security import get_current_user, require_manager
@@ -584,6 +584,24 @@ def list_transfer_batches(
     return [_batch_view(session, batch) for batch in batches]
 
 
+def _receipt_retry_result(
+    session: Session, request_id: str, batch_id: int, user_id: int, request_hash: str,
+) -> Optional[dict]:
+    existing = session.exec(select(StockTransferReceipt).where(
+        StockTransferReceipt.client_request_id == request_id
+    )).first()
+    if not existing:
+        return None
+    if (
+        existing.transfer_id != batch_id or existing.operator_user_id != user_id
+        or existing.request_hash != request_hash
+    ):
+        raise HTTPException(409, "该请求编号已经用于其他收货，请核对原收货记录")
+    result = json.loads(existing.result_json)
+    result["duplicate"] = True
+    return result
+
+
 @router.post("/stock/transfer-batches/{batch_id}/receive")
 def receive_transfer_batch(
     batch_id: int,
@@ -591,17 +609,29 @@ def receive_transfer_batch(
     manager: User = Depends(require_manager),
     session: Session = Depends(get_session),
 ):
+    user_id = manager.id
+    request_json = json.dumps({
+        "batch_id": batch_id, "note": data.note,
+        "items": [row.model_dump() for row in sorted(data.items, key=lambda row: row.item_id)],
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    request_hash = hashlib.sha256(request_json.encode("utf-8")).hexdigest()
     batch = session.exec(
         select(StockTransferBatch).where(StockTransferBatch.id == batch_id).with_for_update()
+        .execution_options(populate_existing=True)
     ).first()
     if not batch:
         raise HTTPException(404, "批量调拨单不存在")
+    # Check before status/remaining quantities: a completed batch must also allow retries.
+    existing = _receipt_retry_result(session, data.client_request_id, batch_id, user_id, request_hash)
+    if existing:
+        return existing
     if batch.status not in {"shipped", "partial"}:
         raise HTTPException(409, "该调拨单当前不能收货")
     if not data.items:
         raise HTTPException(400, "请填写本次实收或拒收数量")
     items = session.exec(
         select(StockTransferItem).where(StockTransferItem.transfer_id == batch.id).with_for_update()
+        .execution_options(populate_existing=True)
     ).all()
     item_by_id = {item.id: item for item in items}
     seen: set[int] = set()
@@ -616,46 +646,71 @@ def receive_transfer_batch(
         remaining = item.qty - item.received_qty - item.rejected_qty
         if change <= 0 or change > remaining:
             raise HTTPException(400, "本次实收和拒收数量必须大于 0，且不能超过在途数量")
-        if receipt.received_qty:
-            _adjust_stock(session, item.sku_id, batch.to_store, receipt.received_qty)
-            session.add(StockLog(
-                sku_id=item.sku_id, change=receipt.received_qty, type="transfer_batch_in",
-                note=data.note or f"批量调拨单 {batch.transfer_no} 确认收货",
-                operator=manager.username, operator_user_id=manager.id,
-                store=batch.to_store, transfer_batch_id=batch.id,
-            ))
-        if receipt.rejected_qty:
-            _adjust_stock(session, item.sku_id, batch.from_store, receipt.rejected_qty)
-            session.add(StockLog(
-                sku_id=item.sku_id, change=receipt.rejected_qty, type="transfer_batch_reject",
-                note=data.note or f"批量调拨单 {batch.transfer_no} 拒收退回调出店",
-                operator=manager.username, operator_user_id=manager.id,
-                store=batch.from_store, transfer_batch_id=batch.id,
-            ))
-        item.received_qty += receipt.received_qty
-        item.rejected_qty += receipt.rejected_qty
-        session.add(item)
 
-    accounted = sum(item.received_qty + item.rejected_qty for item in items)
-    planned = sum(item.qty for item in items)
-    batch.status = "received" if accounted == planned else "partial"
-    batch.received_by = manager.username
-    if batch.status == "received":
-        batch.received_at = utc_now()
-    if data.note:
-        batch.note = data.note
-    session.add(batch)
-    add_audit_event(
-        session, action="transfer_batch.receive", entity_type="stock_transfer_batch",
-        entity_id=batch.id, actor=manager, store=batch.to_store,
-        detail={
-            "status": batch.status,
-            "items": [{"item_id": item.item_id, "received_qty": item.received_qty,
-                       "rejected_qty": item.rejected_qty} for item in data.items],
-        },
+    record = StockTransferReceipt(
+        client_request_id=data.client_request_id, transfer_id=batch_id,
+        operator_user_id=user_id, request_hash=request_hash, request_json=request_json,
     )
-    session.commit()
-    return {"ok": True, "transfer": _batch_view(session, batch)}
+    try:
+        # Reserve the request ID before writing stock; all changes share one transaction.
+        session.add(record)
+        session.flush()
+        for receipt in data.items:
+            item = item_by_id[receipt.item_id]
+            if receipt.received_qty:
+                _adjust_stock(session, item.sku_id, batch.to_store, receipt.received_qty)
+                session.add(StockLog(
+                    sku_id=item.sku_id, change=receipt.received_qty, type="transfer_batch_in",
+                    note=data.note or f"批量调拨单 {batch.transfer_no} 确认收货",
+                    operator=manager.username, operator_user_id=user_id,
+                    store=batch.to_store, transfer_batch_id=batch.id,
+                ))
+            if receipt.rejected_qty:
+                _adjust_stock(session, item.sku_id, batch.from_store, receipt.rejected_qty)
+                session.add(StockLog(
+                    sku_id=item.sku_id, change=receipt.rejected_qty, type="transfer_batch_reject",
+                    note=data.note or f"批量调拨单 {batch.transfer_no} 拒收退回调出店",
+                    operator=manager.username, operator_user_id=user_id,
+                    store=batch.from_store, transfer_batch_id=batch.id,
+                ))
+            item.received_qty += receipt.received_qty
+            item.rejected_qty += receipt.rejected_qty
+            session.add(item)
+
+        accounted = sum(item.received_qty + item.rejected_qty for item in items)
+        planned = sum(item.qty for item in items)
+        batch.status = "received" if accounted == planned else "partial"
+        batch.received_by = manager.username
+        if batch.status == "received":
+            batch.received_at = utc_now()
+        if data.note:
+            batch.note = data.note
+        session.add(batch)
+        add_audit_event(
+            session, action="transfer_batch.receive", entity_type="stock_transfer_batch",
+            entity_id=batch.id, actor=manager, store=batch.to_store,
+            request_id=data.client_request_id,
+            detail={
+                "receipt_id": record.id, "status": batch.status,
+                "items": [item.model_dump() for item in data.items],
+            },
+        )
+        session.flush()
+        result = {"ok": True, "duplicate": False, "receipt_id": record.id,
+                  "transfer": _batch_view(session, batch)}
+        record.result_json = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        session.add(record)
+        session.commit()
+        return result
+    except IntegrityError:
+        session.rollback()
+        existing = _receipt_retry_result(session, data.client_request_id, batch_id, user_id, request_hash)
+        if existing:
+            return existing
+        raise HTTPException(409, "收货提交冲突，请用原请求重试")
+    except Exception:
+        session.rollback()
+        raise
 
 
 @router.post("/stock/transfer-batches/{batch_id}/cancel")
@@ -702,6 +757,7 @@ def _count_view(session: Session, count: InventoryCount, *, with_items: bool = F
         "count_no": count.count_no,
         "store": count.store,
         "status": count.status,
+        "version": count.version,
         "note": count.note,
         "created_by": count.created_by,
         "completed_by": count.completed_by,
@@ -792,6 +848,21 @@ def get_inventory_count(
     return _count_view(session, count, with_items=True)
 
 
+def _lock_draft_count(session: Session, count_id: int, expected_version: int) -> InventoryCount:
+    # Every writer locks the header first, then refreshes cached state after waiting.
+    count = session.exec(
+        select(InventoryCount).where(InventoryCount.id == count_id)
+        .with_for_update().execution_options(populate_existing=True)
+    ).first()
+    if not count:
+        raise HTTPException(404, "盘点单不存在")
+    if count.status != "draft":
+        raise HTTPException(409, "盘点单已经结束，请重新加载查看结果")
+    if count.version != expected_version:
+        raise HTTPException(409, "盘点单已被其他操作修改，请重新加载并核对实盘数")
+    return count
+
+
 @router.put("/stock/counts/{count_id}/items/{item_id}")
 def update_inventory_count_item(
     count_id: int,
@@ -800,84 +871,101 @@ def update_inventory_count_item(
     manager: User = Depends(require_manager),
     session: Session = Depends(get_session),
 ):
-    count = session.get(InventoryCount, count_id)
-    if not count:
-        raise HTTPException(404, "盘点单不存在")
-    if count.status != "draft":
-        raise HTTPException(409, "只有草稿盘点单可以录入实盘数")
-    item = session.get(InventoryCountItem, item_id)
-    if not item or item.count_id != count.id:
-        raise HTTPException(404, "盘点明细不存在")
-    item.actual_qty = data.actual_qty
-    session.add(item)
-    session.commit()
-    return {"ok": True, "item_id": item.id, "actual_qty": item.actual_qty}
+    try:
+        count = _lock_draft_count(session, count_id, data.expected_version)
+        item = session.exec(
+            select(InventoryCountItem)
+            .where(InventoryCountItem.id == item_id, InventoryCountItem.count_id == count.id)
+            .with_for_update().execution_options(populate_existing=True)
+        ).first()
+        if not item:
+            raise HTTPException(404, "盘点明细不存在")
+        before = item.actual_qty
+        item.actual_qty = data.actual_qty
+        count.version += 1
+        session.add_all([item, count])
+        add_audit_event(
+            session, action="inventory_count.item_update", entity_type="inventory_count",
+            entity_id=count.id, actor=manager, store=count.store,
+            detail={"item_id": item.id, "before": before, "after": item.actual_qty, "version": count.version},
+        )
+        result = {"ok": True, "item_id": item.id, "actual_qty": item.actual_qty, "version": count.version}
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise
 
 
 @router.post("/stock/counts/{count_id}/complete")
 def complete_inventory_count(
     count_id: int,
-    data: InventoryCountFinish,
+    data: InventoryCountComplete,
     manager: User = Depends(require_manager),
     session: Session = Depends(get_session),
 ):
-    count = session.exec(
-        select(InventoryCount).where(InventoryCount.id == count_id).with_for_update()
-    ).first()
-    if not count:
-        raise HTTPException(404, "盘点单不存在")
-    if count.status != "draft":
-        raise HTTPException(409, "该盘点单已经结束")
-    items = session.exec(
-        select(InventoryCountItem).where(InventoryCountItem.count_id == count.id).with_for_update()
-    ).all()
-    unentered = [item.id for item in items if item.actual_qty is None]
-    if unentered:
-        raise HTTPException(400, f"还有 {len(unentered)} 个商品未录入实盘数")
-    conflicts = []
-    for item in items:
-        inv = session.exec(
-            select(Inventory).where(Inventory.sku_id == item.sku_id, Inventory.store == count.store)
-        ).first()
-        if not inv or inv.updated_at != item.inventory_updated_at:
-            conflicts.append(item.sku_id)
-    if conflicts:
-        raise HTTPException(409, f"盘点期间有 {len(conflicts)} 个 SKU 发生库存变化，请新建盘点单复盘")
+    try:
+        count = _lock_draft_count(session, count_id, data.expected_version)
+        items = session.exec(
+            select(InventoryCountItem).where(InventoryCountItem.count_id == count.id)
+            .order_by(InventoryCountItem.sku_id, InventoryCountItem.id)
+            .with_for_update().execution_options(populate_existing=True)
+        ).all()
+        actuals = {row.item_id: row.actual_qty for row in data.items}
+        if len(actuals) != len(data.items) or set(actuals) != {item.id for item in items}:
+            raise HTTPException(400, "请提交盘点单的全部明细，不能遗漏、重复或包含其他单据的明细")
+        conflicts = []
+        for item in items:
+            inv = session.exec(
+                select(Inventory).where(Inventory.sku_id == item.sku_id, Inventory.store == count.store)
+                .execution_options(populate_existing=True)
+            ).first()
+            if not inv or inv.updated_at != item.inventory_updated_at or inv.quantity != item.system_qty:
+                conflicts.append(item.sku_id)
+        if conflicts:
+            raise HTTPException(409, f"盘点期间有 {len(conflicts)} 个 SKU 发生库存变化，请新建盘点单复盘")
 
-    now = utc_now()
-    for item in items:
-        delta = item.actual_qty - item.system_qty
-        result = session.execute(
-            update(Inventory)
-            .where(
-                Inventory.sku_id == item.sku_id,
-                Inventory.store == count.store,
-                Inventory.updated_at == item.inventory_updated_at,
+        now = utc_now()
+        for item in items:
+            item.actual_qty = actuals[item.id]
+            delta = item.actual_qty - item.system_qty
+            result = session.execute(
+                update(Inventory)
+                .where(
+                    Inventory.sku_id == item.sku_id,
+                    Inventory.store == count.store,
+                    Inventory.quantity == item.system_qty,
+                    Inventory.updated_at == item.inventory_updated_at,
+                )
+                .values(quantity=item.actual_qty, updated_at=now)
             )
-            .values(quantity=item.actual_qty, updated_at=now)
+            if result.rowcount != 1:
+                raise HTTPException(409, "盘点完成时库存发生变化，请新建盘点单复盘")
+            session.add(item)
+            if delta:
+                session.add(StockLog(
+                    sku_id=item.sku_id, change=delta, type="count_adjust",
+                    note=data.note or f"盘点单 {count.count_no} 差异调整",
+                    operator=manager.username, operator_user_id=manager.id,
+                    store=count.store, count_id=count.id,
+                ))
+        count.status = "completed"
+        count.version += 1
+        count.completed_by = manager.username
+        count.completed_at = now
+        if data.note:
+            count.note = data.note
+        session.add(count)
+        add_audit_event(
+            session, action="inventory_count.complete", entity_type="inventory_count",
+            entity_id=count.id, actor=manager, store=count.store,
+            detail={"adjusted_items": sum(1 for item in items if item.actual_qty != item.system_qty),
+                    "version": count.version},
         )
-        if result.rowcount != 1:
-            session.rollback()
-            raise HTTPException(409, "盘点完成时库存发生变化，请新建盘点单复盘")
-        if delta:
-            session.add(StockLog(
-                sku_id=item.sku_id, change=delta, type="count_adjust",
-                note=data.note or f"盘点单 {count.count_no} 差异调整",
-                operator=manager.username, operator_user_id=manager.id,
-                store=count.store, count_id=count.id,
-            ))
-    count.status = "completed"
-    count.completed_by = manager.username
-    count.completed_at = now
-    if data.note:
-        count.note = data.note
-    session.add(count)
-    add_audit_event(
-        session, action="inventory_count.complete", entity_type="inventory_count",
-        entity_id=count.id, actor=manager, store=count.store,
-        detail={"adjusted_items": sum(1 for item in items if item.actual_qty != item.system_qty)},
-    )
-    session.commit()
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
     return {"ok": True, "count": _count_view(session, count, with_items=True)}
 
 
@@ -888,25 +976,24 @@ def cancel_inventory_count(
     manager: User = Depends(require_manager),
     session: Session = Depends(get_session),
 ):
-    count = session.exec(
-        select(InventoryCount).where(InventoryCount.id == count_id).with_for_update()
-    ).first()
-    if not count:
-        raise HTTPException(404, "盘点单不存在")
-    if count.status != "draft":
-        raise HTTPException(409, "只有盘点中的单据可以取消")
-    count.status = "cancelled"
-    count.cancelled_by = manager.username
-    count.cancelled_at = utc_now()
-    if data.note:
-        count.note = data.note
-    session.add(count)
-    add_audit_event(
-        session, action="inventory_count.cancel", entity_type="inventory_count",
-        entity_id=count.id, actor=manager, store=count.store,
-        detail={"note": data.note},
-    )
-    session.commit()
+    try:
+        count = _lock_draft_count(session, count_id, data.expected_version)
+        count.status = "cancelled"
+        count.version += 1
+        count.cancelled_by = manager.username
+        count.cancelled_at = utc_now()
+        if data.note:
+            count.note = data.note
+        session.add(count)
+        add_audit_event(
+            session, action="inventory_count.cancel", entity_type="inventory_count",
+            entity_id=count.id, actor=manager, store=count.store,
+            detail={"note": data.note, "version": count.version},
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
     return {"ok": True, "count": _count_view(session, count, with_items=True)}
 
 
