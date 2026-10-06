@@ -284,9 +284,6 @@ def sku_barcode_image(sku_id: int, session: Session = Depends(get_session)):
     sku = session.get(Sku, sku_id)
     if not sku:
         raise HTTPException(404, "SKU 不存在")
-    before = {"color": sku.color, "size": sku.size, "price": sku.price,
-              "cost": sku.cost, "safety_stock": sku.safety_stock,
-              "active": sku.active}
     png = generate_barcode_png(sku.barcode)
     return Response(content=png, media_type="image/png")
 
@@ -314,6 +311,9 @@ def update_sku(
     sku = session.get(Sku, sku_id)
     if not sku:
         raise HTTPException(404, "SKU 不存在")
+    before = {"color": sku.color, "size": sku.size, "price": sku.price,
+              "cost": sku.cost, "safety_stock": sku.safety_stock,
+              "active": sku.active}
     # 注意：库存数量不在这里直接改，应走入库/出库接口以保留流水
     for key, value in data.model_dump(exclude_unset=True).items():
         if isinstance(value, str):

@@ -104,12 +104,25 @@ class StockTransferItem(SQLModel, table=True):
     rejected_qty: int = 0
 
 
+class StockTransferReceipt(SQLModel, table=True):
+    """One committed receipt, with a stable response for safe client retries."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    client_request_id: str = Field(index=True, unique=True)
+    transfer_id: int = Field(foreign_key="stocktransferbatch.id", index=True)
+    operator_user_id: int = Field(foreign_key="app_user.id", index=True)
+    request_hash: str
+    request_json: str
+    result_json: str = ""
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+
+
 class InventoryCount(SQLModel, table=True):
     """Store count sheet. It keeps a snapshot to prevent overwriting later sales."""
     id: Optional[int] = Field(default=None, primary_key=True)
     count_no: str = Field(index=True, unique=True)
     store: str = Field(index=True)
     status: str = Field(default="draft", index=True)  # draft / completed / cancelled
+    version: int = Field(default=0)
     note: Optional[str] = None
     created_by: str
     completed_by: Optional[str] = None

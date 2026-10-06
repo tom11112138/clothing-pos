@@ -24,7 +24,7 @@ from routers.stock import (complete_inventory_count, create_inventory_count,
                            create_sale, create_transfer_batch,
                            receive_transfer_batch, stock_in,
                            update_inventory_count_item)  # noqa: E402
-from schemas import (InventoryCountCreate, InventoryCountFinish,
+from schemas import (InventoryCountComplete, InventoryCountCompleteItem, InventoryCountCreate,
                       InventoryCountLineUpdate, RefundCreate, SaleCreate, SaleItem,
                       StockMove, TransferBatchCreate, TransferBatchItemCreate,
                       TransferBatchReceive, TransferBatchReceiveItem)  # noqa: E402
@@ -102,19 +102,26 @@ class WorkflowTests(unittest.TestCase):
             item_id = transfer["items"][0]["id"]
             self.assertEqual(transfer["status"], "shipped")
 
-            partial = receive_transfer_batch(transfer["id"], TransferBatchReceive(items=[
-                TransferBatchReceiveItem(item_id=item_id, received_qty=1)
-            ]), manager, session)["transfer"]
+            partial = receive_transfer_batch(transfer["id"], TransferBatchReceive(
+                client_request_id="test-receive-request-0001",
+                items=[TransferBatchReceiveItem(item_id=item_id, received_qty=1)],
+            ), manager, session)["transfer"]
             self.assertEqual(partial["status"], "partial")
-            finished = receive_transfer_batch(transfer["id"], TransferBatchReceive(items=[
-                TransferBatchReceiveItem(item_id=item_id, received_qty=1)
-            ]), manager, session)["transfer"]
+            finished = receive_transfer_batch(transfer["id"], TransferBatchReceive(
+                client_request_id="test-receive-request-0002",
+                items=[TransferBatchReceiveItem(item_id=item_id, received_qty=1)],
+            ), manager, session)["transfer"]
             self.assertEqual(finished["status"], "received")
 
             count = create_inventory_count(InventoryCountCreate(store="2号店"), manager, session)["count"]
             count_item = count["items"][0]
-            update_inventory_count_item(count["id"], count_item["id"], InventoryCountLineUpdate(actual_qty=2), manager, session)
-            completed = complete_inventory_count(count["id"], InventoryCountFinish(), manager, session)["count"]
+            saved = update_inventory_count_item(count["id"], count_item["id"], InventoryCountLineUpdate(
+                actual_qty=2, expected_version=count["version"],
+            ), manager, session)
+            completed = complete_inventory_count(count["id"], InventoryCountComplete(
+                expected_version=saved["version"],
+                items=[InventoryCountCompleteItem(item_id=count_item["id"], actual_qty=2)],
+            ), manager, session)["count"]
             self.assertEqual(completed["status"], "completed")
 
     def test_stock_in_is_idempotent(self):
