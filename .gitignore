@@ -5,5 +5,6 @@ backend/routers/__pycache__/
 backend/*.db
 backend/*.db-*
 backups/
+label-preview/
 *.pyc
 *.log

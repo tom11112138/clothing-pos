@@ -225,8 +225,37 @@
     .modal-detail span:last-child { color: var(--text); font-weight: 500; }
     .modal-actions { display: flex; gap: 10px; margin-top: 18px; }
     .modal-actions .btn { flex: 1; justify-content: center; }
-    .barcode-stage { text-align: center; }
-    .barcode-stage img { max-width: 100%; background: #fff; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+    .label-modal { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; width: 800px; min-width: 0; max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); max-height: calc(100dvh - 40px); overflow: hidden; }
+    .label-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 24px; margin-top: 20px; align-items: start; min-height: 0; overflow-y: auto; padding-right: 8px; }
+    .label-preview { width: 208px; height: 312px; background: #fff; border: 1px solid var(--border-strong); box-shadow: 0 3px 12px #17202b12; display: flex; align-items: center; justify-content: center; }
+    .label-preview img { display: block; width: 100%; height: 100%; }
+    .label-settings { min-width: 0; }
+    .label-layout .label-preview { position: sticky; top: 0; }
+    .label-pair { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 12px; }
+    .label-settings .field { margin-bottom: 12px; }
+    .label-settings select, .label-settings input:not([type="checkbox"]), .label-settings textarea { width: 100%; }
+    .label-settings textarea { resize: vertical; min-height: 64px; border: 1px solid var(--border-strong); border-radius: 6px; padding: 9px 11px; font: inherit; }
+    .label-settings .check { display: flex; white-space: normal; align-items: flex-start; margin: 12px 0; padding-bottom: 0; }
+    .label-settings .check input { flex: 0 0 auto; }
+    .label-settings .muted { overflow-wrap: anywhere; }
+    .label-settings fieldset { border: 0; border-top: 1px solid var(--border); padding: 14px 0 0; margin: 12px 0 0; min-width: 0; }
+    .label-status { font-size: 12px; margin: 12px 0; color: var(--danger); overflow-wrap: anywhere; }
+    .label-settings .code-cell { overflow-wrap: anywhere; }
+    .label-help { margin: 8px 0 12px; font-size: 12px; line-height: 1.6; }
+    .label-help summary { cursor: pointer; color: var(--text); }
+    .label-help dl { margin: 8px 0; }
+    .label-help dt { font-weight: 600; margin-top: 8px; }
+    .label-help dd { margin: 2px 0 0; color: var(--text-soft); overflow-wrap: anywhere; }
+    .label-reference { margin-bottom: 12px; line-height: 1.6; }
+    .label-actions { flex-wrap: wrap; }
+    .label-actions .btn { white-space: nowrap; }
+    @media (max-width: 760px) {
+      .label-layout { grid-template-columns: 1fr; gap: 20px; }
+      .label-layout .label-preview { position: static; }
+      .label-preview { margin: auto; }
+      .label-pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+      .label-actions .btn { flex-basis: 40%; }
+    }
 
     /* ---------- 登录页 ---------- */
     .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #eef2ff 0%, var(--bg) 55%); padding: 20px; }
@@ -501,11 +530,12 @@
             <div class="row">
               <div class="field"><label>款号 *</label><input v-model="np.code" placeholder="如 TS001" style="width:130px" /></div>
               <div class="field"><label>款名 *</label><input v-model="np.name" placeholder="如 纯棉圆领T恤" style="width:180px" /></div>
-              <div class="field"><label>品类</label><input v-model="np.category" placeholder="上衣" style="width:110px" /></div>
+              <div class="field"><label for="product-category">品类</label><select id="product-category" v-model="np.category" :disabled="productCatalogLoading || !productCategories.length" style="width:140px"><option value="">{{ productCatalogLoading ? '载入中...' : '请选择品类' }}</option><option v-for="c in productCategories" :key="c.name" :value="c.name">{{ c.name }}</option><option v-if="np.category && !productCategories.some(c => c.name===np.category)" :value="np.category">{{ np.category }}</option></select></div>
               <div class="field"><label>品牌</label><input v-model="np.brand" style="width:120px" /></div>
               <div class="field"><label>吊牌价</label><input type="number" v-model.number="np.tag_price" style="width:100px" /></div>
               <button class="btn" @click="createProduct">创建款式</button>
             </div>
+            <div v-if="productCatalogError" class="login-err" role="alert">{{ productCatalogError }} <button class="btn sm ghost" @click="loadLabelCatalog">重新载入品类</button></div>
           </div>
 
           <div class="card">
@@ -765,15 +795,51 @@
     </div>
   </div>
 
-  <!-- 条码弹窗 -->
+  <!-- 零售吊牌贴纸 -->
   <div class="modal-mask" v-if="barcodeSku" @click.self="closeBarcode">
-    <div class="modal barcode-stage">
-      <div class="modal-title">{{ barcodeSku.product_name }}</div>
-      <p class="modal-desc">{{ barcodeSku.color || '-' }} / {{ barcodeSku.size || '-' }} · {{ barcodeSku.barcode }}</p>
-      <img v-if="barcodeUrl" :src="barcodeUrl" style="margin-top:8px" />
-      <div class="modal-actions">
+    <div class="modal label-modal" role="dialog" aria-modal="true" aria-labelledby="label-title">
+      <div class="modal-title" id="label-title">合格证标签</div>
+      <p class="modal-desc">精臣 B21 · 40×60 mm</p>
+      <div class="label-layout">
+        <div class="label-preview" :aria-busy="labelLoading">
+          <img v-if="barcodeUrl" :src="barcodeUrl" :alt="barcodeSku.product_name + '合格证标签'" />
+          <span v-else class="muted">{{ labelLoading ? '生成中...' : '标签未生成' }}</span>
+        </div>
+        <div class="label-settings">
+          <div class="label-pair">
+            <div class="field"><label for="label-price">价格</label><select id="label-price" v-model="labelPriceBasis" @change="refreshLabel()" :disabled="labelLoading || labelSaving"><option value="tag">建议零售价</option><option value="selling">当前售价</option></select></div>
+            <div class="field"><label for="label-copies">系统打印份数</label><input id="label-copies" type="number" min="1" max="100" step="1" v-model.number="labelCopies" /></div>
+          </div>
+          <div class="label-pair">
+            <div class="field"><label>商品条码</label><div class="code-cell">{{ barcodeSku.barcode }}</div></div>
+            <div v-if="labelInfo" class="field"><label>{{ labelInfo.price_title }}</label><div class="strong">¥{{ labelInfo.price }}</div></div>
+          </div>
+          <fieldset v-if="isManager && labelForm" :disabled="labelSaving || labelLoading">
+            <div class="field"><label for="label-composition">成份</label><textarea id="label-composition" v-model="labelForm.composition" maxlength="160" rows="2" @input="labelForm.label_verified=false"></textarea></div>
+            <div class="field"><label for="label-reference-category">标准参考品类</label><select id="label-reference-category" v-model="labelCategoryFilter"><option value="">全部品类</option><option v-for="c in labelCategories" :key="c.name" :value="c.name">{{ c.name }}</option></select></div>
+            <div v-if="selectedLabelCategory" class="muted label-reference">{{ selectedLabelCategory.note }}</div>
+            <div class="field"><label for="label-standard">执行标准</label><select id="label-standard" v-model="labelStandardChoice" @change="chooseLabelStandard"><option value="">未选择</option><optgroup v-if="relatedLabelStandards.length" :label="labelCategoryFilter + ' · 相关参考标准'"><option v-for="s in relatedLabelStandards" :key="s.code" :value="s.code">{{ s.code }} · {{ s.name }}</option></optgroup><optgroup :label="labelCategoryFilter ? '其他品类参考标准' : '全部参考标准'"><option v-for="s in otherLabelStandards" :key="s.code" :value="s.code">{{ s.code }} · {{ s.name }}</option></optgroup><option value="__custom">其他标准（手动填写）</option></select></div>
+            <div v-if="labelStandardChoice==='__custom'" class="field"><label for="label-standard-code">标准号及年代号</label><input id="label-standard-code" v-model="labelForm.execution_standard" maxlength="60" @input="labelForm.label_verified=false" /></div>
+            <div v-if="selectedLabelStandard" class="muted label-reference">{{ selectedLabelStandard.scope }} {{ selectedLabelStandard.note || '' }} <a :href="selectedLabelStandard.source" target="_blank" rel="noopener noreferrer">官方来源</a></div>
+            <div v-if="labelCatalogCheckedOn" class="muted">目录核对：{{ labelCatalogCheckedOn }}，以厂家资料及官方最新状态为准。</div>
+            <div class="field" style="margin-top:12px"><label for="label-usage">适用人群 / 接触类型</label><select id="label-usage" v-model="labelForm.label_usage" @change="labelForm.label_verified=false"><option value="">未选择</option><option v-for="u in labelUsages" :key="u.value" :value="u.value">{{ u.name }}</option></select></div>
+            <div v-if="labelMinimum" class="muted label-reference">{{ labelMinimum.description }}<br />{{ labelMinimum.standard }} · 至少 {{ labelMinimum.minimum }} 类 <a :href="labelMinimum.source" target="_blank" rel="noopener noreferrer">官方来源</a></div>
+            <div class="field"><label for="label-safety">安全技术类别</label><select id="label-safety" v-model="labelForm.safety_category" @change="labelForm.label_verified=false"><option value="">未确认</option><option v-for="c in labelSafetyCategories" :key="c.value" :value="c.value">{{ c.name }}</option></select></div>
+            <div v-if="selectedLabelSafety" class="muted label-reference">{{ selectedLabelSafety.description }}<br />常见例子：{{ selectedLabelSafety.examples }}</div>
+            <details class="label-help"><summary>A / B / C 类适用说明</summary><dl><template v-for="c in labelSafetyCategories" :key="c.value"><dt>{{ c.name }}</dt><dd>{{ c.description }} {{ c.examples }}</dd></template></dl><p class="muted">类别是安全技术要求，不是质量等级。同一品类按年龄和实际接触方式判断，套装各件分别核对；最低要求不代表商品已检测合格。</p></details>
+            <label class="check"><input type="checkbox" v-model="labelForm.label_verified" /><span>已核对原吊牌、供货资料或检测报告</span></label>
+            <button class="btn sm" @click="saveLabel" :disabled="!labelDirty">{{ labelSaving ? '保存中...' : '保存标签资料' }}</button>
+          </fieldset>
+          <div v-if="labelInfo && !labelInfo.printable" class="label-status" role="status">{{ labelInfo.issues.join('；') }}</div>
+          <div v-else-if="labelDirty" class="label-status" role="status">标签资料有未保存修改</div>
+          <div class="muted">免驱设备：下载图片后用精臣软件打印。</div>
+          <div v-if="labelError" class="login-err" role="alert">{{ labelError }} <button class="btn sm ghost" @click="refreshLabel(true)" :disabled="labelSaving || labelLoading">重新载入</button></div>
+        </div>
+      </div>
+      <div class="modal-actions label-actions">
         <button class="btn ghost" @click="closeBarcode">关闭</button>
-        <button class="btn" @click="printBarcode">打印</button>
+        <button class="btn ghost" @click="printBarcode" :disabled="!labelPrintable">系统打印</button>
+        <button class="btn" @click="downloadLabel" :disabled="!labelPrintable">下载标签 PNG</button>
       </div>
     </div>
   </div>
@@ -859,6 +925,9 @@ createApp({
   data() {
     return {
       tab: 'stock', toast: '', barcodeSku: null, barcodeUrl: '', pendingMove: null, confirmBox: null,
+      labelInfo: null, labelLoading: false, labelError: '', labelPriceBasis: 'tag', labelCopies: 1, labelViewVersion: 0,
+      labelForm: null, labelSaving: false, labelStandards: [], labelUsages: [], labelStandardChoice: '',
+      labelCategories: [], labelCategoryFilter: '', labelSafetyCategories: [], labelCatalogCheckedOn: '',
       stores: STORES,
       currentStore: localStorage.getItem('pos_store') || STORES[0],
       storeMenuOpen: false, storeMenuIndex: 0,
@@ -876,6 +945,7 @@ createApp({
       countSubmitting: false, countLoading: false, countError: '', countReloadRequired: false, countViewVersion: 0,
       // 商品
       products: [],
+      productCategories: [], productCatalogLoading: false, productCatalogError: '',
       np: { code:'', name:'', category:'', brand:'', tag_price:0 },
       batch: { product_id:null, colorStr:'', sizeStr:'', price:0, cost:0, quantity:0, safety_stock:0 },
       // 收银
@@ -893,7 +963,9 @@ createApp({
         authVersion += 1;
         this.resetPos();
         this.resetCountView();
+        this.closeBarcode();
         this.closeStoreMenu();
+        this.productCategories = []; this.productCatalogLoading = false; this.productCatalogError = '';
       },
     },
     currentStore: {
@@ -912,6 +984,17 @@ createApp({
     },
   },
   computed: {
+    labelDirty() {
+      if (!this.labelForm || !this.labelInfo) return false;
+      return Object.keys(this.labelForm).some(key => (this.labelForm[key] ?? '') !== (this.labelInfo.configuration?.[key] ?? ''));
+    },
+    labelPrintable() { return !!this.labelInfo?.printable && !this.labelDirty && !this.labelLoading && !this.labelSaving; },
+    selectedLabelStandard() { return this.labelStandards.find(item => item.code === this.labelForm?.execution_standard); },
+    labelMinimum() { return this.labelUsages.find(item => item.value === this.labelForm?.label_usage); },
+    selectedLabelCategory() { return this.labelCategories.find(item => item.name === this.labelCategoryFilter); },
+    relatedLabelStandards() { return this.labelStandards.filter(item => item.categories?.includes(this.labelCategoryFilter)); },
+    otherLabelStandards() { return this.labelStandards.filter(item => !item.categories?.includes(this.labelCategoryFilter)); },
+    selectedLabelSafety() { return this.labelSafetyCategories.find(item => item.value === this.labelForm?.safety_category); },
     cartTotal() { return this.cart.reduce((s,c)=> s + c.price*c.qty, 0).toFixed(2); },
     newQty() {
       if (!this.pendingMove) return 0;
@@ -1417,26 +1500,98 @@ createApp({
       };
     },
     async showBarcode(s){
+      if (!this.me) return;
+      this.closeBarcode();
+      this.barcodeSku = s; this.labelCopies = 1;
+      await this.refreshLabel(true);
+    },
+    async refreshLabel(resetForm=false){
+      if (!this.me || !this.barcodeSku) return;
+      const skuId = this.barcodeSku.id, owner = authVersion, version = ++this.labelViewVersion;
+      this.labelLoading = true; this.labelError = ''; this.labelInfo = null; this.barcodeUrl = '';
       try {
-        const res = await fetch('/api/skus/'+s.id+'/barcode.png', { credentials:'same-origin' });
-        if (!res.ok) throw new Error('条码图片加载失败');
-        if (this.barcodeUrl) URL.revokeObjectURL(this.barcodeUrl);
-        this.barcodeUrl = URL.createObjectURL(await res.blob());
-        this.barcodeSku = s;
-      } catch(e){ this.flash(e.message); }
+        const data = await api('/api/skus/'+skuId+'/label?price_basis='+encodeURIComponent(this.labelPriceBasis));
+        if (owner !== authVersion || version !== this.labelViewVersion) return;
+        this.labelInfo = data; this.barcodeUrl = data.image_url;
+        this.labelStandards = data.standards?.execution_standards || [];
+        this.labelUsages = data.standards?.usages || [];
+        this.labelCategories = data.standards?.categories || [];
+        this.labelSafetyCategories = data.standards?.safety_categories || [];
+        this.labelCatalogCheckedOn = data.standards?.checked_on || '';
+        if (resetForm || !this.labelForm) {
+          this.labelCategoryFilter = this.labelCategories.some(item => item.name === data.product_category) ? data.product_category : '';
+          this.labelForm = Object.fromEntries(Object.entries(data.configuration || {}).map(([key, value]) => [key, value ?? '']));
+          this.labelStandardChoice = this.labelStandards.some(item => item.code === this.labelForm.execution_standard)
+            ? this.labelForm.execution_standard : (this.labelForm.execution_standard ? '__custom' : '');
+        }
+      } catch(e){
+        if (owner === authVersion && version === this.labelViewVersion) { this.labelError = e.message; this.flash(e.message); }
+      } finally { if (owner === authVersion && version === this.labelViewVersion) this.labelLoading = false; }
     },
     closeBarcode(){
-      if (this.barcodeUrl) URL.revokeObjectURL(this.barcodeUrl);
+      this.labelViewVersion += 1;
       this.barcodeUrl = ''; this.barcodeSku = null;
+      this.labelInfo = null; this.labelError = ''; this.labelLoading = false;
+      this.labelForm = null; this.labelSaving = false; this.labelStandards = []; this.labelUsages = []; this.labelStandardChoice = '';
+      this.labelCategories = []; this.labelCategoryFilter = ''; this.labelSafetyCategories = []; this.labelCatalogCheckedOn = '';
+    },
+    chooseLabelStandard(){
+      this.labelForm.execution_standard = this.labelStandardChoice === '__custom' ? '' : this.labelStandardChoice;
+      this.labelForm.label_verified = false;
+    },
+    async saveLabel(){
+      if (!this.isManager || !this.labelInfo || !this.labelForm || this.labelSaving || this.labelLoading || !this.labelDirty) return;
+      const owner = authVersion, version = this.labelViewVersion;
+      const data = Object.fromEntries(Object.entries(this.labelForm).map(([key, value]) => [key, typeof value === 'string' ? value.trim() || null : value]));
+      data.expected_version = this.labelInfo.label_version;
+      this.labelSaving = true; this.labelError = '';
+      try {
+        await api('/api/products/'+this.labelInfo.product_id+'/label', {method:'PUT', body:JSON.stringify(data)});
+        if (owner !== authVersion || version !== this.labelViewVersion) return;
+        this.labelSaving = false;
+        await this.refreshLabel(true);
+      } catch(e){
+        if (owner === authVersion && version === this.labelViewVersion) this.labelError = e.message;
+      } finally {
+        if (owner === authVersion && version === this.labelViewVersion) this.labelSaving = false;
+      }
+    },
+    downloadLabel(){
+      if (!this.labelPrintable) return;
+      const link = document.createElement('a');
+      link.href = this.labelInfo.image_url;
+      link.download = `sku-${this.labelInfo.sku_id}-40x60mm.png`;
+      document.body.appendChild(link); link.click(); link.remove();
     },
     printBarcode(){
-      if(!this.barcodeUrl) return;
-      const w = window.open('');
-      w.document.write('<img src="'+this.barcodeUrl+'" onload="window.print();window.close()">');
+      if (!this.labelPrintable) return;
+      if (!Number.isSafeInteger(this.labelCopies) || this.labelCopies < 1 || this.labelCopies > 100) return this.flash('打印份数须为 1 到 100 的整数');
+      const query = new URLSearchParams({sku_id:this.labelInfo.sku_id, price_basis:this.labelPriceBasis, copies:this.labelCopies});
+      const page = window.open('/static/label-print.html?'+query, '_blank');
+      if (page) page.opener = null;
+      else this.flash('打印窗口被浏览器拦截，请允许弹出窗口');
     },
 
     async loadProducts(){
-      try { this.products = await api('/api/products'); } catch(e){ this.flash(e.message); }
+      const owner = authVersion;
+      try {
+        const products = await api('/api/products');
+        if (owner !== authVersion) return;
+        this.products = products;
+        await this.loadLabelCatalog();
+      } catch(e){ if (owner === authVersion) this.flash(e.message); }
+    },
+    async loadLabelCatalog(){
+      if (!this.me || this.productCatalogLoading) return;
+      const owner = authVersion;
+      this.productCatalogLoading = true; this.productCatalogError = '';
+      try {
+        const catalog = await api('/api/products/label-catalog');
+        if (owner !== authVersion) return;
+        this.productCategories = catalog.categories || [];
+      } catch(e){
+        if (owner === authVersion) this.productCatalogError = e.message;
+      } finally { if (owner === authVersion) this.productCatalogLoading = false; }
     },
     async createProduct(){
       if(!this.np.code || !this.np.name){ return this.flash('款号和款名必填'); }

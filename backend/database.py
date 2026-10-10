@@ -90,6 +90,10 @@ def _ensure_runtime_schema() -> None:
     with engine.begin() as conn:
         dialect = conn.dialect.name
         if dialect == "postgresql":
+            for name in ("composition", "execution_standard", "label_usage", "safety_category"):
+                conn.execute(text(f"alter table product add column if not exists {name} varchar"))
+            conn.execute(text("alter table product add column if not exists label_verified boolean not null default false"))
+            conn.execute(text("alter table product add column if not exists label_version integer not null default 0"))
             conn.execute(text(
                 "create unique index if not exists ux_app_user_username_lower "
                 "on app_user(lower(username))"
@@ -173,6 +177,14 @@ def _ensure_runtime_schema() -> None:
                 end $$;
             """))
         elif dialect == "sqlite":
+            product_names = {row[1] for row in conn.execute(text("pragma table_info(product)"))}
+            for name, definition in (
+                ("composition", "varchar"), ("execution_standard", "varchar"),
+                ("label_usage", "varchar"), ("safety_category", "varchar"),
+                ("label_verified", "boolean not null default 0"), ("label_version", "integer not null default 0"),
+            ):
+                if name not in product_names:
+                    conn.execute(text(f"alter table product add column {name} {definition}"))
             conn.execute(text(
                 "create unique index if not exists ux_app_user_username_lower "
                 "on app_user(lower(username))"

@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Literal
 
 from sqlmodel import Field, SQLModel
 
@@ -19,6 +19,15 @@ class ProductUpdate(SQLModel):
     brand: Optional[str] = Field(default=None, max_length=80)
     tag_price: Optional[float] = Field(default=None, ge=0)
     image_url: Optional[str] = Field(default=None, max_length=500)
+
+
+class ProductLabelUpdate(SQLModel):
+    expected_version: int = Field(ge=0)
+    composition: Optional[str] = Field(default=None, max_length=160)
+    execution_standard: Optional[str] = Field(default=None, max_length=60)
+    label_usage: Optional[Literal["adult_skin", "adult_outer", "child_skin", "child_outer", "infant"]] = None
+    safety_category: Optional[Literal["A", "B", "C"]] = None
+    label_verified: bool = False
 
 
 # ---------- SKU ----------

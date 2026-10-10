@@ -6,7 +6,8 @@ from sqlmodel import Session, select
 
 from database import get_session
 from models import Inventory, Product, SalesOrderItem, Sku, StockLog, User
-from schemas import ProductCreate, ProductUpdate
+from schemas import ProductCreate, ProductUpdate, ProductLabelUpdate
+from label_standards import LABEL_FIELDS, label_configuration, label_issues, normalize_category, normalize_standard, standards_catalog
 from security import require_manager
 from audit import add_audit_event
 
@@ -21,6 +22,7 @@ def create_product(data: ProductCreate, manager: User = Depends(require_manager)
     values = data.model_dump()
     values["code"] = values["code"].strip()
     values["name"] = values["name"].strip()
+    values["category"] = normalize_category(values.get("category"))
     if session.exec(select(Product).where(Product.code == values["code"])).first():
         raise HTTPException(400, f"款号 {values['code']} 已存在")
     product = Product(**values)
@@ -59,6 +61,11 @@ def list_products(
     return session.exec(stmt.order_by(Product.id.desc())).all()
 
 
+@router.get("/label-catalog")
+def get_label_catalog():
+    return standards_catalog()
+
+
 @router.get("/{product_id}", response_model=Product)
 def get_product(product_id: int, session: Session = Depends(get_session)):
     product = session.get(Product, product_id)
@@ -67,18 +74,60 @@ def get_product(product_id: int, session: Session = Depends(get_session)):
     return product
 
 
+@router.put("/{product_id}/label", response_model=Product)
+def update_product_label(product_id: int, data: ProductLabelUpdate,
+                         manager: User = Depends(require_manager), session: Session = Depends(get_session)):
+    product = session.exec(select(Product).where(Product.id == product_id)
+                           .with_for_update().execution_options(populate_existing=True)).first()
+    if not product:
+        raise HTTPException(404, "商品不存在")
+    if product.label_version != data.expected_version:
+        session.rollback()
+        raise HTTPException(409, "标签资料已被其他人修改，请重新打开标签后再保存")
+    config = {key: (value.strip() or None) if isinstance(value, str) else value
+              for key, value in data.model_dump(exclude={"expected_version"}).items()}
+    config["execution_standard"] = normalize_standard(config["execution_standard"]) or None
+    issues = label_issues(config)
+    if config["label_verified"] and issues:
+        session.rollback()
+        raise HTTPException(400, "；".join(issues))
+    before = {**label_configuration(product), "label_version": product.label_version}
+    try:
+        for key in LABEL_FIELDS:
+            setattr(product, key, config[key])
+        product.label_version += 1
+        session.add(product)
+        add_audit_event(session, action="product.label.update", entity_type="product", entity_id=product.id,
+                        actor=manager, before=before,
+                        after={**label_configuration(product), "label_version": product.label_version})
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    session.refresh(product)
+    return product
+
+
 @router.put("/{product_id}", response_model=Product)
 def update_product(
     product_id: int, data: ProductUpdate, manager: User = Depends(require_manager),
     session: Session = Depends(get_session)
 ):
-    product = session.get(Product, product_id)
+    product = session.exec(select(Product).where(Product.id == product_id)
+                           .with_for_update().execution_options(populate_existing=True)).first()
     if not product:
         raise HTTPException(404, "商品不存在")
     before = {"name": product.name, "category": product.category,
               "brand": product.brand, "tag_price": product.tag_price,
-              "image_url": product.image_url}
-    for key, value in data.model_dump(exclude_unset=True).items():
+              "image_url": product.image_url, "label_verified": product.label_verified,
+              "label_version": product.label_version}
+    values = data.model_dump(exclude_unset=True)
+    if "category" in values:
+        values["category"] = normalize_category(values["category"])
+    if any(key in values and values[key] != getattr(product, key) for key in ("name", "category")):
+        product.label_verified = False
+        product.label_version += 1
+    for key, value in values.items():
         if isinstance(value, str):
             value = value.strip()
         setattr(product, key, value)
@@ -88,7 +137,8 @@ def update_product(
         entity_id=product.id, actor=manager, before=before,
         after={"name": product.name, "category": product.category,
                "brand": product.brand, "tag_price": product.tag_price,
-               "image_url": product.image_url},
+               "image_url": product.image_url, "label_verified": product.label_verified,
+               "label_version": product.label_version},
     )
     session.commit()
     session.refresh(product)

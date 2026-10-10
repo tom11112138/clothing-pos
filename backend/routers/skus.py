@@ -1,4 +1,5 @@
-from typing import Optional, List
+import base64
+from typing import Optional, List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -9,6 +10,8 @@ from database import DEFAULT_STORES, get_session
 from models import Inventory, Product, SalesOrderItem, Sku, StockLog, User
 from schemas import SkuCreate, SkuBatchCreate, SkuUpdate
 from barcode_utils import generate_barcode_png, make_sku_barcode
+from label_utils import generate_label_png, label_data
+from label_standards import standards_catalog
 from security import get_current_user, require_manager
 from audit import add_audit_event
 
@@ -286,6 +289,42 @@ def sku_barcode_image(sku_id: int, session: Session = Depends(get_session)):
         raise HTTPException(404, "SKU 不存在")
     png = generate_barcode_png(sku.barcode)
     return Response(content=png, media_type="image/png")
+
+
+def _retail_label(sku_id: int, price_basis: str, session: Session):
+    sku = session.get(Sku, sku_id)
+    if not sku:
+        raise HTTPException(404, "SKU 不存在")
+    product = session.get(Product, sku.product_id)
+    if not product:
+        raise HTTPException(404, "商品不存在")
+    try:
+        data = label_data(sku, product, price_basis)
+        return data, generate_label_png(data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@router.get("/skus/{sku_id}/label")
+def sku_retail_label(sku_id: int, price_basis: Literal["tag", "selling"] = "tag",
+                     user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    data, png = _retail_label(sku_id, price_basis, session)
+    return {**data, "standards": standards_catalog(),
+            "image_url": "data:image/png;base64," + base64.b64encode(png).decode("ascii")}
+
+
+@router.get("/skus/{sku_id}/label.png")
+def sku_retail_label_image(sku_id: int, price_basis: Literal["tag", "selling"] = "tag",
+                           user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    data, png = _retail_label(sku_id, price_basis, session)
+    if not data["printable"]:
+        raise HTTPException(400, "；".join(data["issues"]))
+    return Response(content=png, media_type="image/png", headers={
+        "Content-Disposition": f'attachment; filename="sku-{sku_id}-40x60mm.png"',
+        "Cache-Control": "no-store",
+    })
 
 
 @router.get("/skus/{sku_id}")
