@@ -48,6 +48,7 @@ class Sku(SQLModel, table=True):
     quantity: int = 0                                   # 当前库存
     safety_stock: int = 0                               # 安全库存，低于此值预警
     active: bool = True                                 # 是否启用；下架/停用后不再出现在默认销售列表
+    version: int = 0
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -278,3 +279,14 @@ class AuditEvent(SQLModel, table=True):
     detail_json: Optional[str] = None
     ip_address: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class ManagementOperation(SQLModel, table=True):
+    """Committed response for retriable multi-record management transactions."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    client_request_id: str = Field(index=True, unique=True)
+    operator_user_id: int = Field(foreign_key="app_user.id", index=True)
+    action: str
+    request_hash: str
+    result_json: str = ""
+    created_at: datetime = Field(default_factory=utc_now)

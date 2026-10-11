@@ -4,12 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from database import get_session
+from database import DEFAULT_STORES, get_session
 from models import Inventory, Product, SalesOrderItem, Sku, StockLog, User
-from schemas import ProductCreate, ProductUpdate, ProductLabelUpdate
+from schemas import ProductCreate, ProductUpdate, ProductLabelUpdate, ProductIntake, validate_money
 from label_standards import LABEL_FIELDS, label_configuration, label_issues, normalize_category, normalize_standard, standards_catalog
 from security import require_manager
 from audit import add_audit_event
+from management_operations import begin_operation, finish_operation
+from routers.skus import _next_unique_barcode
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
@@ -64,6 +66,73 @@ def list_products(
 @router.get("/label-catalog")
 def get_label_catalog():
     return standards_catalog()
+
+
+@router.post("/intake")
+def intake_product(data: ProductIntake, manager: User = Depends(require_manager),
+                   session: Session = Depends(get_session)):
+    if data.store not in DEFAULT_STORES:
+        raise HTTPException(400, "请选择有效的初始入库门店")
+    values = data.product.model_dump()
+    values["code"], values["name"] = values["code"].strip(), values["name"].strip()
+    values["category"] = normalize_category(values["category"])
+    if not values["code"] or not values["name"]:
+        raise HTTPException(400, "款号和品名不能为空")
+    try:
+        validate_money(values["tag_price"])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    config = {key: (value.strip() or None) if isinstance(value, str) else value
+              for key, value in data.label.model_dump(exclude={"expected_version"}).items()}
+    config["execution_standard"] = normalize_standard(config["execution_standard"]) or None
+    issues = label_issues(config)
+    if config["label_verified"] and issues:
+        raise HTTPException(400, "；".join(issues))
+    pairs = [(item.color, item.size) for item in data.variants]
+    if len(pairs) != len(set(pairs)):
+        raise HTTPException(400, "颜色和尺码组合不能重复")
+    payload = {"product": values, "label": config, "store": data.store,
+               "variants": [item.model_dump() for item in data.variants]}
+    try:
+        operation, replay = begin_operation(session, data.client_request_id, "product.intake", manager, payload)
+        if replay is not None:
+            return replay
+        if session.exec(select(Product.id).where(Product.code == values["code"])).first():
+            raise HTTPException(409, "款号已存在，请更换款号或为已有款式追加规格")
+        product = Product(**values, **config)
+        session.add(product)
+        session.flush()
+        items = []
+        for variant in data.variants:
+            sku = Sku(product_id=product.id, color=variant.color, size=variant.size,
+                      barcode=_next_unique_barcode(session, product), price=variant.price,
+                      cost=variant.cost, safety_stock=variant.safety_stock)
+            session.add(sku)
+            session.flush()
+            for store in DEFAULT_STORES:
+                session.add(Inventory(sku_id=sku.id, store=store,
+                                      quantity=variant.quantity if store == data.store else 0,
+                                      safety_stock=variant.safety_stock))
+            if variant.quantity:
+                session.add(StockLog(sku_id=sku.id, store=data.store, type="in",
+                                     change=variant.quantity, note="新款初始入库",
+                                     operator_user_id=manager.id))
+            items.append({"id": sku.id, "barcode": sku.barcode, **variant.model_dump()})
+        add_audit_event(session, action="product.intake", entity_type="product", entity_id=product.id,
+                        actor=manager, store=data.store, request_id=data.client_request_id,
+                        after={**values, **config, "store": data.store, "items": items},
+                        detail={"client_request_id": data.client_request_id})
+        result = {"ok": True, "product_id": product.id, "code": product.code,
+                  "store": data.store, "created_count": len(items), "items": items}
+        finish_operation(session, operation, result)
+        session.commit()
+        return result
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(409, "款号、规格或条码冲突，本次未录入任何商品，请检查后重试")
+    except Exception:
+        session.rollback()
+        raise
 
 
 @router.get("/{product_id}", response_model=Product)

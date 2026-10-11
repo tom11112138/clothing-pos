@@ -1,6 +1,19 @@
 from typing import Optional, List, Literal
+from decimal import Decimal
+from math import isfinite
+from datetime import datetime
 
+from pydantic import field_validator, model_validator
 from sqlmodel import Field, SQLModel
+
+
+def validate_money(value):
+    if value is None or not isfinite(value):
+        raise ValueError("金额必须是有效的非负金额")
+    cents = Decimal(str(value)) * 100
+    if value < 0 or cents != cents.to_integral_value() or cents > 2**53 - 1:
+        raise ValueError("金额最多保留两位小数，且不能超出可用范围")
+    return value
 
 
 # ---------- Product ----------
@@ -53,12 +66,94 @@ class SkuBatchCreate(SQLModel):
 
 
 class SkuUpdate(SQLModel):
+    expected_version: Optional[int] = Field(default=None, ge=0)
     color: Optional[str] = Field(default=None, max_length=80)
     size: Optional[str] = Field(default=None, max_length=40)
     price: Optional[float] = Field(default=None, ge=0)
     cost: Optional[float] = Field(default=None, ge=0)
     safety_stock: Optional[int] = Field(default=None, ge=0)
     active: Optional[bool] = None
+
+    @field_validator("price", "cost")
+    @classmethod
+    def valid_money(cls, value):
+        return validate_money(value)
+
+
+class PricingSelection(SQLModel):
+    sku_id: int = Field(gt=0)
+    expected_version: int = Field(ge=0)
+
+
+class SkuBatchPricing(SQLModel):
+    client_request_id: str = Field(min_length=16, max_length=80)
+    product_id: int = Field(gt=0)
+    items: List[PricingSelection] = Field(min_length=1, max_length=500)
+    price: Optional[float] = Field(default=None, ge=0)
+    cost: Optional[float] = Field(default=None, ge=0)
+
+    @field_validator("price", "cost")
+    @classmethod
+    def valid_money(cls, value):
+        return validate_money(value)
+
+    @model_validator(mode="after")
+    def selected_fields(self):
+        if self.price is None and self.cost is None:
+            raise ValueError("至少选择修改成本或售价")
+        return self
+
+
+class IntakeVariant(SQLModel):
+    color: str = Field(min_length=1, max_length=80)
+    size: str = Field(min_length=1, max_length=40)
+    price: float = Field(ge=0)
+    cost: float = Field(ge=0)
+    quantity: int = Field(default=0, ge=0, le=2147483647)
+    safety_stock: int = Field(default=0, ge=0, le=2147483647)
+
+    @field_validator("price", "cost")
+    @classmethod
+    def valid_money(cls, value):
+        return validate_money(value)
+
+    @field_validator("color", "size")
+    @classmethod
+    def nonempty(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("颜色和尺码不能为空")
+        return value
+
+
+class IntakeLabel(ProductLabelUpdate):
+    expected_version: int = Field(default=0, ge=0)
+
+
+class ProductIntake(SQLModel):
+    client_request_id: str = Field(min_length=16, max_length=80)
+    product: ProductCreate
+    label: IntakeLabel = Field(default_factory=IntakeLabel)
+    store: str = Field(min_length=1)
+    variants: List[IntakeVariant] = Field(min_length=1, max_length=500)
+
+
+class InventoryCorrection(SQLModel):
+    client_request_id: str = Field(min_length=16, max_length=80)
+    sku_id: int = Field(gt=0)
+    store: str = Field(min_length=1)
+    expected_quantity: int = Field(ge=0, le=2147483647)
+    expected_updated_at: datetime
+    actual_qty: int = Field(ge=0, le=2147483647)
+    note: str = Field(min_length=1, max_length=500)
+
+    @field_validator("note")
+    @classmethod
+    def reason_required(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("请填写库存纠错原因")
+        return value
 
 
 # ---------- 库存变动 / 收银 ----------

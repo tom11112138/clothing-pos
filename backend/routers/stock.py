@@ -1,6 +1,7 @@
 import uuid
 import hashlib
 import json
+from datetime import UTC
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,11 +14,12 @@ from models import (Inventory, InventoryCount, InventoryCountItem, Product, Sale
                     SalesOrderItem, Sku, StockLog, StockTransfer as TransferOrder,
                     StockTransferBatch, StockTransferItem, StockTransferReceipt, User)
 from schemas import (InventoryCountComplete, InventoryCountCreate, InventoryCountFinish, InventoryCountLineUpdate,
-                     SaleCreate, StockMove, StockTransfer as StockTransferCreate,
+                     SaleCreate, StockMove, InventoryCorrection, StockTransfer as StockTransferCreate,
                      TransferBatchCreate, TransferBatchReceive, TransferCancel, TransferReceive)
 from security import get_current_user, require_manager
 from audit import add_audit_event
 from time_utils import utc_iso, utc_now
+from management_operations import begin_operation, finish_operation
 
 router = APIRouter(prefix="/api", tags=["stock"])
 
@@ -151,6 +153,52 @@ def _existing_sale_result(session: Session, order: SalesOrder) -> dict:
         }
         for item in items
     ])
+
+
+@router.post("/stock/corrections")
+def correct_inventory(data: InventoryCorrection, manager: User = Depends(require_manager),
+                      session: Session = Depends(get_session)):
+    store = _validate_store(data.store)
+    expected = data.expected_updated_at
+    if expected.tzinfo is not None:
+        expected = expected.astimezone(UTC).replace(tzinfo=None)
+    payload = {**data.model_dump(mode="json", exclude={"client_request_id", "expected_updated_at"}),
+               "expected_updated_at": utc_iso(expected)}
+    try:
+        operation, replay = begin_operation(session, data.client_request_id, "stock.correction", manager, payload)
+        if replay is not None:
+            return replay
+        inventory = session.exec(select(Inventory).where(
+            Inventory.sku_id == data.sku_id, Inventory.store == store
+        ).with_for_update().execution_options(populate_existing=True)).first()
+        if not inventory:
+            raise HTTPException(404, "该门店的 SKU 库存不存在")
+        if inventory.quantity != data.expected_quantity or inventory.updated_at != expected:
+            raise HTTPException(409, "库存已发生变动，请重新读取库存并核实实盘数量")
+        now = utc_now()
+        changed = session.execute(update(Inventory).where(
+            Inventory.id == inventory.id, Inventory.quantity == data.expected_quantity,
+            Inventory.updated_at == expected
+        ).values(quantity=data.actual_qty, updated_at=now)).rowcount
+        if changed != 1:
+            raise HTTPException(409, "库存已发生变动，请重新读取库存并核实实盘数量")
+        delta = data.actual_qty - data.expected_quantity
+        session.add(StockLog(sku_id=data.sku_id, store=store, type="adjust", change=delta,
+                             note=data.note, operator_user_id=manager.id))
+        add_audit_event(session, action="stock.correction", entity_type="sku", entity_id=data.sku_id,
+                        actor=manager, store=store, request_id=data.client_request_id,
+                        before={"quantity": data.expected_quantity, "updated_at": utc_iso(expected)},
+                        after={"quantity": data.actual_qty, "updated_at": utc_iso(now)},
+                        detail={"reason": data.note, "client_request_id": data.client_request_id})
+        result = {"ok": True, "sku_id": data.sku_id, "store": store,
+                  "before_quantity": data.expected_quantity, "quantity": data.actual_qty,
+                  "change": delta, "inventory_updated_at": utc_iso(now)}
+        finish_operation(session, operation, result)
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise
 
 
 @router.post("/stock/in")

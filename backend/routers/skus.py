@@ -1,19 +1,23 @@
 import base64
 from typing import Optional, List, Literal
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from database import DEFAULT_STORES, get_session
 from models import Inventory, Product, SalesOrderItem, Sku, StockLog, User
-from schemas import SkuCreate, SkuBatchCreate, SkuUpdate
+from schemas import SkuCreate, SkuBatchCreate, SkuUpdate, SkuBatchPricing
 from barcode_utils import generate_barcode_png, make_sku_barcode
 from label_utils import generate_label_png, label_data
 from label_standards import standards_catalog
 from security import get_current_user, require_manager
 from audit import add_audit_event
+from management_operations import begin_operation, finish_operation
+from time_utils import utc_iso
 
 router = APIRouter(prefix="/api", tags=["skus"])
 
@@ -137,7 +141,8 @@ def _inventory_for(session: Session, sku: Sku, store: str) -> Inventory:
     return inv
 
 
-def _sku_view(sku: Sku, product: Product, *, quantity: int, safety_stock: int, store: str) -> dict:
+def _sku_view(sku: Sku, product: Product, *, quantity: int, safety_stock: int, store: str,
+              inventory_updated_at: Optional[datetime] = None) -> dict:
     """组装前端需要的展示结构：SKU + 所属款式信息 + 低库存标记。"""
     return {
         "id": sku.id,
@@ -154,6 +159,8 @@ def _sku_view(sku: Sku, product: Product, *, quantity: int, safety_stock: int, s
         "safety_stock": safety_stock,
         "store": store,
         "active": sku.active,
+        "version": sku.version,
+        "inventory_updated_at": utc_iso(inventory_updated_at),
         "low_stock": quantity <= safety_stock,
     }
 
@@ -256,6 +263,7 @@ def list_skus(
             inv = _inventory_for(session, sku, store_value)
             result.append(_sku_view(
                 sku, product, quantity=inv.quantity, safety_stock=inv.safety_stock, store=store_value,
+                inventory_updated_at=inv.updated_at,
             ))
     if low_stock:
         result = [r for r in result if r["low_stock"]]
@@ -278,7 +286,58 @@ def get_by_barcode(
     product = session.get(Product, sku.product_id)
     store_value = _store_for_user(store, user)
     inv = _inventory_for(session, sku, store_value)
-    return _sku_view(sku, product, quantity=inv.quantity, safety_stock=inv.safety_stock, store=store_value)
+    return _sku_view(sku, product, quantity=inv.quantity, safety_stock=inv.safety_stock, store=store_value,
+                     inventory_updated_at=inv.updated_at)
+
+
+def _apply_sku_values(session, sku, values, manager, request_id=None):
+    before = {key: getattr(sku, key) for key in ("color", "size", "price", "cost", "safety_stock", "active")}
+    if all(getattr(sku, key) == value for key, value in values.items()):
+        return False
+    version = sku.version
+    changed = session.execute(update(Sku).where(Sku.id == sku.id, Sku.version == version)
+                              .values(**values, version=version + 1)
+                              .execution_options(synchronize_session=False))
+    if changed.rowcount != 1:
+        raise HTTPException(409, "该 SKU 已被其他操作修改，请重新加载后核对再保存")
+    session.refresh(sku)
+    add_audit_event(session, action="sku.update", entity_type="sku", entity_id=sku.id,
+                    actor=manager, request_id=request_id, before=before,
+                    after={key: getattr(sku, key) for key in before},
+                    detail={"version_before": version, "version_after": sku.version})
+    return True
+
+
+@router.post("/skus/pricing/batch")
+def batch_update_pricing(data: SkuBatchPricing, manager: User = Depends(require_manager),
+                         session: Session = Depends(get_session)):
+    try:
+        selection = {item.sku_id: item.expected_version for item in data.items}
+        if len(selection) != len(data.items):
+            raise HTTPException(400, "不能重复选择同一个 SKU")
+        values = {key: getattr(data, key) for key in ("price", "cost") if getattr(data, key) is not None}
+        payload = {"product_id": data.product_id, "items": sorted(selection.items()), **values}
+        operation, replay = begin_operation(session, data.client_request_id, "sku.pricing_batch", manager, payload)
+        if replay is not None:
+            return replay
+        rows = session.exec(select(Sku).where(Sku.id.in_(selection)).order_by(Sku.id)
+                            .with_for_update().execution_options(populate_existing=True)).all()
+        if len(rows) != len(selection):
+            raise HTTPException(409, "所选 SKU 已被删除，本次未保存任何价格，请重新加载")
+        if any(sku.product_id != data.product_id for sku in rows):
+            raise HTTPException(400, "所选 SKU 不属于同一款式")
+        if any(sku.version != selection[sku.id] for sku in rows):
+            raise HTTPException(409, "所选 SKU 已有修改，本次未保存任何价格，请重新加载核对")
+        changed = sum(_apply_sku_values(session, sku, values, manager, data.client_request_id) for sku in rows)
+        result = {"ok": True, "changed_count": changed, "items": [
+            {"id": sku.id, "price": sku.price, "cost": sku.cost, "version": sku.version} for sku in rows
+        ]}
+        finish_operation(session, operation, result)
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise
 
 
 @router.get("/skus/{sku_id}/barcode.png")
@@ -336,7 +395,8 @@ def get_sku(sku_id: int, store: Optional[str] = None,
     product = session.get(Product, sku.product_id)
     store_value = _store_for_user(store, user)
     inv = _inventory_for(session, sku, store_value)
-    return _sku_view(sku, product, quantity=inv.quantity, safety_stock=inv.safety_stock, store=store_value)
+    return _sku_view(sku, product, quantity=inv.quantity, safety_stock=inv.safety_stock, store=store_value,
+                     inventory_updated_at=inv.updated_at)
 
 
 # ---------- 修改 / 删除 ----------
@@ -347,30 +407,25 @@ def update_sku(
     manager: User = Depends(require_manager),
     session: Session = Depends(get_session),
 ):
-    sku = session.get(Sku, sku_id)
+    sku = session.exec(select(Sku).where(Sku.id == sku_id)
+                       .with_for_update().execution_options(populate_existing=True)).first()
     if not sku:
         raise HTTPException(404, "SKU 不存在")
-    before = {"color": sku.color, "size": sku.size, "price": sku.price,
-              "cost": sku.cost, "safety_stock": sku.safety_stock,
-              "active": sku.active}
+    if data.expected_version is not None and data.expected_version != sku.version:
+        session.rollback()
+        raise HTTPException(409, "该 SKU 已被其他操作修改，请重新加载后核对再保存")
     # 注意：库存数量不在这里直接改，应走入库/出库接口以保留流水
-    for key, value in data.model_dump(exclude_unset=True).items():
-        if isinstance(value, str):
-            value = value.strip()
-        setattr(sku, key, value)
-    session.add(sku)
-    add_audit_event(
-        session, action="sku.update", entity_type="sku", entity_id=sku.id,
-        actor=manager, before=before,
-        after={"color": sku.color, "size": sku.size, "price": sku.price,
-               "cost": sku.cost, "safety_stock": sku.safety_stock,
-               "active": sku.active},
-    )
+    values = {key: value.strip() if isinstance(value, str) else value
+              for key, value in data.model_dump(exclude_unset=True, exclude={"expected_version"}).items()}
     try:
+        _apply_sku_values(session, sku, values, manager)
         session.commit()
     except IntegrityError:
         session.rollback()
         raise HTTPException(400, "SKU 规格或条码已存在，不能重复")
+    except Exception:
+        session.rollback()
+        raise
     session.refresh(sku)
     return sku
 

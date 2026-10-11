@@ -35,6 +35,7 @@ function harness() {
   vm.runInNewContext(script, {
     Vue: { createApp(value) { config = value; return { mount() {} }; } },
     document: { cookie: '', addEventListener() {}, removeEventListener() {} },
+    window: { addEventListener() {}, removeEventListener() {} },
     localStorage: { getItem() { return null; }, removeItem() {}, setItem() {} },
     crypto: { randomUUID() { return `checkout-test-${++sequence}`; } },
     setTimeout() {},

@@ -196,6 +196,32 @@
     .checkout-note { width: 100%; min-height: 74px; resize: vertical; border: 1px solid var(--border-strong); border-radius: 6px; padding: 10px; font: inherit; }
     .checkout-note:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
     .order-note { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
+    .modal.sku-price-modal { width: 440px; min-width: 0; max-width: calc(100vw - 40px); max-height: calc(100dvh - 40px); overflow-y: auto; }
+    .sku-price-modal .modal-detail span:last-child { overflow-wrap: anywhere; min-width: 0; }
+    .sku-price-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
+    .sku-price-fields input { width: 100%; min-width: 0; }
+    .sku-price-fields .field { min-width: 0; }
+    .modal.workflow-modal { width: 760px; min-width: 0; max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); overflow-y: auto; }
+    .workflow-modal h3 { font-size: 16px; margin: 12px 0; }
+    .workflow-modal .table-wrap { max-height: 42dvh; }
+    .workflow-modal td, .workflow-modal th { padding: 10px 8px; }
+    .workflow-fields { border: 0; padding: 0; margin: 16px 0; min-width: 0; }
+    .workflow-fields .row { gap: 12px; }
+    .workflow-fields input, .workflow-fields select { max-width: 100%; }
+    .entry-extra { padding: 16px 0; border-top: 1px solid var(--border); }
+    .entry-extra summary { cursor: pointer; font-weight: 600; margin-bottom: 14px; }
+    .variant-money { width: 100px; }
+    .workflow-summary { margin: 16px 0; padding: 12px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); line-height: 1.8; overflow-wrap: anywhere; }
+    .workflow-modal .modal-btns { flex-wrap: wrap; }
+    .bulk-pricing-table { table-layout: fixed; }
+    .bulk-pricing-table th:first-child { width: 36px; }
+    .bulk-pricing-table th, .bulk-pricing-table td { white-space: normal; overflow-wrap: anywhere; letter-spacing: 0; }
+    .bulk-pricing-table .price-before { color: var(--text-soft); display: block; margin-bottom: 4px; }
+    @media (max-width: 600px) {
+      .workflow-fields .field { width: 100%; min-width: 0 !important; }
+      .workflow-fields .field input, .workflow-fields .field select { width: 100% !important; }
+      .modal.workflow-modal { padding: 20px 16px; }
+    }
     .order-modal { width: 600px; min-width: 0; max-width: calc(100vw - 40px); max-height: calc(100dvh - 40px); overflow-y: auto; }
     .report-tabs { margin-bottom: 20px; }
     .report-toolbar { padding-bottom: 18px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
@@ -402,7 +428,7 @@
               type="button"
               class="store-trigger"
               :class="{ open: storeMenuOpen }"
-              :disabled="!isManager || checkingOut || pendingScans > 0"
+              :disabled="!isManager || checkingOut || pendingScans > 0 || hasManagementPending"
               :title="!isManager ? '店员账号固定所属门店' : cart.length ? '请先结算或清空购物车再切换门店' : '切换当前门店'"
               aria-haspopup="listbox"
               :aria-expanded="storeMenuOpen"
@@ -443,7 +469,7 @@
           <div class="user-chip" v-if="me">
             <span class="who">{{ me.name || me.username }}</span>
             <span class="role-tag" :class="me.role">{{ me.role==='manager' ? '店长' : '店员' }}</span>
-            <button class="btn ghost sm" @click="logout" :disabled="checkingOut || loggingOut">登出</button>
+            <button class="btn ghost sm" @click="logout" :disabled="checkingOut || loggingOut || hasManagementPending">登出</button>
           </div>
         </div>
       </div>
@@ -467,23 +493,27 @@
               <label class="check"><input type="checkbox" v-model="lowOnly" @change="loadStock" /> 仅看低库存</label>
               <label class="check" v-if="isManager"><input type="checkbox" v-model="includeInactive" @change="loadStock" /> 含停用</label>
               <button class="btn" @click="loadStock">查询</button>
+              <button v-if="isManager" class="btn ghost" @click="openCorrection()" :disabled="checkingOut || !!checkoutAttempt">单品纠错</button>
             </div>
           </div>
           <div class="card">
             <div class="card-head"><h2>库存明细</h2><span class="hint" v-if="skus.length">共 {{ skus.length }} 个 SKU</span></div>
             <div class="table-wrap" v-if="skus.length">
               <table>
-                <thead><tr><th>款式</th><th>颜色 / 尺码</th><th>条码</th><th>售价</th><th>库存</th><th style="text-align:right">操作</th></tr></thead>
+                <thead><tr><th>款式</th><th>颜色 / 尺码</th><th>条码</th><th>售价</th><th v-if="isManager">成本</th><th>库存</th><th style="text-align:right">操作</th></tr></thead>
                 <tbody>
                   <tr v-for="s in skus" :key="s.id" :class="{low: s.low_stock, inactive: !s.active}">
                     <td><div class="strong">{{ s.product_name }} <span v-if="!s.active" class="pill off">已停用</span></div><div class="code-cell">{{ s.product_code }}</div></td>
                     <td>{{ s.color || '-' }} / {{ s.size || '-' }}</td>
                     <td class="code-cell">{{ s.barcode }}</td>
                     <td class="price">¥{{ s.price }}</td>
+                    <td v-if="isManager" class="price">¥{{ s.cost }}</td>
                     <td><span class="strong">{{ s.quantity }}</span> <span v-if="s.low_stock" class="pill low">低库存</span></td>
                     <td style="text-align:right">
                       <div class="actions" style="justify-content:flex-end">
                         <template v-if="isManager">
+                          <button class="btn sm ghost" @click="openSkuPricing(s)" :disabled="checkingOut || !!checkoutAttempt">改价</button>
+                          <button class="btn sm ghost" @click="openCorrection(s)" :disabled="stockStore==='all' || checkingOut || !!checkoutAttempt">纠错</button>
                           <input class="qty-in" type="number" min="1" v-model.number="s._qty" placeholder="数量" />
                           <button class="btn sm" @click="askMove(s,'in')">入库</button>
                           <button class="btn sm ghost" @click="askMove(s,'out')">出库</button>
@@ -559,20 +589,50 @@
         <!-- ============ 商品录入 ============ -->
         <template v-if="tab==='product'">
           <div class="card">
-            <div class="card-head"><h2>新建款式（SPU）</h2></div>
+            <div class="card-head"><h2>新款录入</h2></div>
+            <fieldset class="workflow-fields" :disabled="intake.saving || !!intake.attempt">
             <div class="row">
               <div class="field"><label>款号 *</label><input v-model="np.code" placeholder="如 TS001" style="width:130px" /></div>
-              <div class="field"><label>款名 *</label><input v-model="np.name" placeholder="如 纯棉圆领T恤" style="width:180px" /></div>
-              <div class="field"><label for="product-category">品类</label><select id="product-category" v-model="np.category" :disabled="productCatalogLoading || !productCategories.length" style="width:140px"><option value="">{{ productCatalogLoading ? '载入中...' : '请选择品类' }}</option><option v-for="c in productCategories" :key="c.name" :value="c.name">{{ c.name }}</option><option v-if="np.category && !productCategories.some(c => c.name===np.category)" :value="np.category">{{ np.category }}</option></select></div>
+              <div class="field"><label>款名 *</label><input v-model="np.name" @input="intake.label.label_verified=false" placeholder="如 纯棉圆领T恤" style="width:180px" /></div>
+              <div class="field"><label for="product-category">品类</label><select id="product-category" v-model="np.category" @change="intake.label.label_verified=false" :disabled="productCatalogLoading || !productCategories.length" style="width:140px"><option value="">{{ productCatalogLoading ? '载入中...' : '请选择品类' }}</option><option v-for="c in productCategories" :key="c.name" :value="c.name">{{ c.name }}</option><option v-if="np.category && !productCategories.some(c => c.name===np.category)" :value="np.category">{{ np.category }}</option></select></div>
               <div class="field"><label>品牌</label><input v-model="np.brand" style="width:120px" /></div>
               <div class="field"><label>吊牌价</label><input type="number" v-model.number="np.tag_price" style="width:100px" /></div>
-              <button class="btn" @click="createProduct">创建款式</button>
             </div>
             <div v-if="productCatalogError" class="login-err" role="alert">{{ productCatalogError }} <button class="btn sm ghost" @click="loadLabelCatalog">重新载入品类</button></div>
+            <details class="entry-extra" style="margin-top:16px">
+              <summary>吊牌资料</summary>
+              <div class="row">
+                <div class="field" style="flex:1;min-width:220px"><label>成份</label><input v-model="intake.label.composition" @input="intake.label.label_verified=false" maxlength="160" /></div>
+                <div class="field" style="flex:1;min-width:220px"><label>执行标准</label><input v-model="intake.label.execution_standard" @input="intake.label.label_verified=false" list="intake-standards" maxlength="60" /><datalist id="intake-standards"><option v-for="s in intakeStandards" :key="s.code" :value="s.code">{{ s.name }}</option></datalist></div>
+                <div class="field"><label>适用对象</label><select v-model="intake.label.label_usage" @change="intake.label.label_verified=false"><option value="">待核对</option><option v-for="u in intakeCatalog.usages || []" :key="u.value" :value="u.value">{{ u.name }}</option></select></div>
+                <div class="field"><label>安全技术类别</label><select v-model="intake.label.safety_category" @change="intake.label.label_verified=false"><option value="">待核对</option><option v-for="s in intakeCatalog.safety_categories || []" :key="s.value" :value="s.value">{{ s.name }}</option></select></div>
+                <label class="check"><input type="checkbox" v-model="intake.label.label_verified" />已按厂家资料核实</label>
+              </div>
+              <div v-if="intakeUsage" class="muted" style="margin-top:12px">{{ intakeUsage.description }}</div>
+              <div v-if="intakeSafety" class="muted" style="margin-top:8px">{{ intakeSafety.description }} {{ intakeSafety.examples }}</div>
+            </details>
+            <h3 style="font-size:16px;margin:16px 0">颜色与尺码</h3>
+            <div class="row">
+              <div class="field"><label>颜色</label><input v-model="intake.colors" placeholder="红,蓝,黑" style="width:150px" /></div>
+              <div class="field"><label>尺码</label><input v-model="intake.sizes" placeholder="S,M,L,XL" style="width:150px" /></div>
+              <div class="field"><label>默认售价</label><input v-model="intake.price" inputmode="decimal" style="width:100px" /></div>
+              <div class="field"><label>默认成本</label><input v-model="intake.cost" inputmode="decimal" style="width:100px" /></div>
+              <div class="field"><label>默认数量</label><input v-model="intake.quantity" type="number" min="0" step="1" style="width:100px" /></div>
+              <div class="field"><label>安全库存</label><input v-model="intake.safety_stock" type="number" min="0" step="1" style="width:100px" /></div>
+              <div class="field"><label>初始入库门店</label><select v-model="intake.store"><option v-for="s in stores" :key="s">{{ s }}</option></select></div>
+              <button type="button" class="btn ghost" @click="buildIntakeVariants">生成规格预览</button>
+            </div>
+            <div class="table-wrap" v-if="intake.variants.length" style="margin-top:16px"><table>
+              <thead><tr><th>颜色</th><th>尺码</th><th>售价</th><th>成本</th><th>{{ intake.store }}数量</th><th>安全库存</th><th>操作</th></tr></thead>
+              <tbody><tr v-for="(v,index) in intake.variants" :key="v.color+'\u0000'+v.size"><td>{{ v.color }}</td><td>{{ v.size }}</td><td><input class="variant-money" v-model="v.price" inputmode="decimal" :aria-label="v.color+v.size+'售价'" /></td><td><input class="variant-money" v-model="v.cost" inputmode="decimal" :aria-label="v.color+v.size+'成本'" /></td><td><input class="qty-in" v-model="v.quantity" type="number" min="0" step="1" :aria-label="v.color+v.size+'数量'" /></td><td><input class="qty-in" v-model="v.safety_stock" type="number" min="0" step="1" :aria-label="v.color+v.size+'安全库存'" /></td><td><button type="button" class="btn sm ghost" @click="intake.variants.splice(index,1)">移除</button></td></tr></tbody>
+            </table></div>
+            </fieldset>
+            <div v-if="intake.error" class="login-err" role="alert">{{ intake.error }}</div>
+            <div class="actions" style="justify-content:flex-end;margin-top:16px"><button class="btn" @click="reviewIntake" :disabled="intake.saving || !intake.variants.length">{{ intake.attempt ? '确认上次录入' : '核对并录入' }}</button></div>
           </div>
 
-          <div class="card">
-            <div class="card-head"><h2>批量生成 SKU（颜色 × 尺码）</h2></div>
+          <details class="entry-extra">
+            <summary>为已有款式追加规格</summary>
             <div class="row">
               <div class="field"><label>选择款式</label>
                 <select v-model="batch.product_id" style="width:200px">
@@ -587,8 +647,7 @@
               <div class="field"><label>安全库存</label><input type="number" v-model.number="batch.safety_stock" style="width:84px" /></div>
               <button class="btn" @click="batchCreate">生成</button>
             </div>
-            <p class="muted" style="margin:14px 0 0">例：红/蓝/黑 × S/M/L = 一次生成 9 个 SKU，条码自动分配。</p>
-          </div>
+          </details>
 
           <div class="card">
             <div class="card-head"><h2>已有款式</h2><span class="hint" v-if="products.length">共 {{ products.length }} 款</span></div>
@@ -602,6 +661,7 @@
                     <td>{{ p.category || '-' }}</td>
                     <td class="price">¥{{ p.tag_price }}</td>
                     <td style="text-align:right">
+                      <button v-if="isManager" class="btn sm ghost" @click="openBulkPricing(p)" :disabled="checkingOut || !!checkoutAttempt">批量改价</button>
                       <button v-if="isManager" class="btn sm danger-ghost" @click="delProduct(p)">删除（含其 SKU）</button>
                       <span v-else class="muted">—</span>
                     </td>
@@ -807,6 +867,77 @@
   </div>
 
   <!-- 入库/出库/调拨 确认弹窗 -->
+  <div class="modal-mask" v-if="me && isManager && bulkPrice.product" @click.self="closeBulkPricing" @keydown.esc="closeBulkPricing">
+    <section class="modal workflow-modal" role="dialog" aria-modal="true" aria-labelledby="bulk-price-title">
+      <div class="modal-title" id="bulk-price-title">同款批量改价</div>
+      <h3>{{ bulkPrice.product.code }} · {{ bulkPrice.product.name }}</h3>
+      <div class="muted">四店共用价格 · 库存不变</div>
+      <div v-if="bulkPrice.loading" class="report-message" role="status">正在加载规格...</div>
+      <fieldset class="workflow-fields" :disabled="bulkPrice.loading || bulkPrice.saving || !!bulkPrice.attempt || bulkPrice.reloadRequired">
+        <div class="row">
+          <label class="check"><input type="checkbox" v-model="bulkPrice.changePrice" />修改售价</label><div v-if="bulkPrice.changePrice" class="field"><label for="bulk-selling-price">新售价（元）</label><input id="bulk-selling-price" v-model="bulkPrice.price" inputmode="decimal" /></div>
+          <label class="check"><input type="checkbox" v-model="bulkPrice.changeCost" />修改成本</label><div v-if="bulkPrice.changeCost" class="field"><label for="bulk-cost-price">新成本（元）</label><input id="bulk-cost-price" v-model="bulkPrice.cost" inputmode="decimal" /></div>
+        </div>
+        <div class="table-wrap" style="margin-top:16px"><table class="bulk-pricing-table"><thead><tr><th><input type="checkbox" aria-label="全选规格" :checked="bulkPrice.rows.length>0 && bulkSelected.length===bulkPrice.rows.length" :indeterminate="bulkSelected.length>0 && bulkSelected.length<bulkPrice.rows.length" @change="selectBulkRows($event.target.checked)" /></th><th>规格 / 条码</th><th>售价</th><th>成本</th></tr></thead><tbody>
+          <tr v-for="s in bulkPrice.rows" :key="s.id"><td><input type="checkbox" v-model="s.selected" :aria-label="'选择'+s.color+s.size" /></td><td>{{ s.color || '-' }} / {{ s.size || '-' }}<span v-if="!s.active" class="pill off">停用</span><div class="code-cell">{{ s.barcode }}</div></td><td><span class="price-before">¥{{ s.price }}</span>→ {{ s.selected && bulkPrice.changePrice ? '¥'+bulkPrice.price : '不变' }}</td><td><span class="price-before">¥{{ s.cost }}</span>→ {{ s.selected && bulkPrice.changeCost ? '¥'+bulkPrice.cost : '不变' }}</td></tr>
+        </tbody></table></div>
+      </fieldset>
+      <div class="workflow-summary">已选 {{ bulkSelected.length }} / {{ bulkPrice.rows.length }} 个规格</div>
+      <div v-if="bulkPrice.error" class="login-err" role="alert">{{ bulkPrice.error }}</div>
+      <div class="modal-btns"><button class="btn ghost" @click="closeBulkPricing" :disabled="bulkPrice.saving || !!bulkPrice.attempt">取消</button><button v-if="bulkPrice.reloadRequired" class="btn ghost" @click="reloadBulkPricing" :disabled="bulkPrice.loading">重新读取规格</button><button class="btn" @click="saveBulkPricing" :disabled="bulkPrice.saving || bulkPrice.loading || bulkPrice.reloadRequired || !bulkSelected.length || (!bulkPrice.changePrice && !bulkPrice.changeCost)">{{ bulkPrice.saving ? '保存中...' : bulkPrice.attempt ? '重试确认' : '确认修改 '+bulkSelected.length+' 个规格' }}</button></div>
+    </section>
+  </div>
+
+  <div class="modal-mask" v-if="me && isManager && intake.review" @click.self="closeIntakeReview" @keydown.esc="closeIntakeReview">
+    <section class="modal workflow-modal" role="dialog" aria-modal="true" aria-labelledby="intake-title">
+      <div class="modal-title" id="intake-title">确认新款录入</div>
+      <div class="workflow-summary"><strong>{{ intake.review.product.code }} · {{ intake.review.product.name }}</strong><br />{{ intake.review.variants.length }} 个规格 · 共 {{ intake.review.variants.reduce((n,v)=>n+v.quantity,0) }} 件 · 入库 {{ intake.review.store }}<br />吊牌资料：{{ intake.review.label.label_verified ? '已核实' : '待核实' }}</div>
+      <div class="table-wrap"><table><thead><tr><th>规格</th><th>售价</th><th>成本</th><th>数量</th></tr></thead><tbody><tr v-for="v in intake.review.variants" :key="v.color+'\u0000'+v.size"><td>{{ v.color }} / {{ v.size }}</td><td>¥{{ v.price }}</td><td>¥{{ v.cost }}</td><td>{{ v.quantity }}</td></tr></tbody></table></div>
+      <div v-if="intake.error" class="login-err" role="alert">{{ intake.error }}</div>
+      <div class="modal-btns"><button class="btn ghost" @click="closeIntakeReview" :disabled="intake.saving || !!intake.attempt">返回修改</button><button class="btn" @click="saveIntake" :disabled="intake.saving">{{ intake.saving ? '录入中...' : intake.attempt ? '重试确认' : '确认录入' }}</button></div>
+    </section>
+  </div>
+
+  <div class="modal-mask" v-if="me && isManager && correction.open" @click.self="closeCorrection" @keydown.esc="closeCorrection">
+    <section class="modal workflow-modal" role="dialog" aria-modal="true" aria-labelledby="correction-title">
+      <div class="modal-title" id="correction-title">单品库存纠错</div>
+      <fieldset class="workflow-fields" :disabled="correction.saving || !!correction.attempt || correction.loading">
+        <div class="row"><div class="field"><label for="correction-store">门店</label><select id="correction-store" v-model="correction.store" @change="invalidateCorrection"><option v-for="s in stores" :key="s">{{ s }}</option></select></div><div class="field" style="flex:1;min-width:180px"><label for="correction-barcode">条码</label><input id="correction-barcode" v-model="correction.barcode" @input="invalidateCorrection" @keyup.enter.prevent="loadCorrection" /></div><button class="btn ghost" @click="loadCorrection">{{ correction.reloadRequired ? '重新读取库存' : '读取库存' }}</button></div>
+      </fieldset>
+      <div v-if="correction.loading" class="report-message" role="status">正在读取...</div>
+      <template v-if="correction.sku">
+        <h3>{{ correction.sku.product_name }} · {{ correction.sku.color || '-' }} / {{ correction.sku.size || '-' }}</h3>
+        <fieldset class="workflow-fields" :disabled="correction.saving || !!correction.attempt || correction.loading || correction.reloadRequired"><div class="row"><div class="field"><label for="correction-actual">实际数量</label><input id="correction-actual" v-model="correction.actual" type="number" min="0" step="1" /></div><div class="field" style="flex:1;min-width:180px"><label for="correction-note">纠错原因 *</label><input id="correction-note" v-model="correction.note" maxlength="500" /></div></div></fieldset>
+        <div class="workflow-summary">{{ correction.store }} · 系统库存 {{ correction.sku.quantity }} → 实际 {{ correction.actual === '' ? '待填写' : correction.actual }}<span v-if="correctionDelta!==null">（{{ correctionDelta>0 ? '+' : '' }}{{ correctionDelta }} 件）</span></div>
+      </template>
+      <div v-if="correction.error" class="login-err" role="alert">{{ correction.error }}</div>
+      <div class="modal-btns"><button class="btn ghost" @click="closeCorrection" :disabled="correction.saving || !!correction.attempt">取消</button><button class="btn danger" @click="saveCorrection" :disabled="correction.saving || correction.loading || correction.reloadRequired || !correction.sku">{{ correction.saving ? '保存中...' : correction.attempt ? '重试确认' : '确认纠正库存' }}</button></div>
+    </section>
+  </div>
+
+  <div class="modal-mask" v-if="me && isManager && skuPriceSku" @click.self="closeSkuPricing" @keydown.esc="closeSkuPricing">
+    <form class="modal sku-price-modal" role="dialog" aria-modal="true" aria-labelledby="sku-price-title" @submit.prevent="saveSkuPricing">
+      <div class="modal-title" id="sku-price-title">修改成本 / 售价</div>
+      <div class="modal-detail">
+        <div><span>款式</span><span>{{ skuPriceSku.product_name }}（{{ skuPriceSku.product_code }}）</span></div>
+        <div><span>规格</span><span>{{ skuPriceSku.color || '-' }} / {{ skuPriceSku.size || '-' }}</span></div>
+        <div><span>条码</span><span class="code-cell">{{ skuPriceSku.barcode }}</span></div>
+        <div><span>适用门店</span><span>四店共用</span></div>
+      </div>
+      <div v-if="skuPriceLoading" class="report-message" role="status">正在加载...</div>
+      <div class="sku-price-fields">
+        <div class="field"><label for="sku-selling-price">售价（元）</label><input id="sku-selling-price" type="text" inputmode="decimal" v-model="skuPriceForm.price" :disabled="skuPriceLoading || skuPriceSaving || skuPriceReloadRequired" required /></div>
+        <div class="field"><label for="sku-cost-price">成本（元）</label><input id="sku-cost-price" type="text" inputmode="decimal" v-model="skuPriceForm.cost" :disabled="skuPriceLoading || skuPriceSaving || skuPriceReloadRequired" required /></div>
+      </div>
+      <div v-if="skuPriceError" class="login-err" role="alert">{{ skuPriceError }}</div>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" @click="closeSkuPricing" :disabled="skuPriceSaving">取消</button>
+        <button v-if="skuPriceReloadRequired" type="button" class="btn ghost" @click="reloadSkuPricing" :disabled="skuPriceLoading || skuPriceSaving">重新加载</button>
+        <button type="submit" class="btn" :disabled="skuPriceLoading || skuPriceSaving || skuPriceReloadRequired">{{ skuPriceSaving ? '保存中...' : '保存价格' }}</button>
+      </div>
+    </form>
+  </div>
+
   <div class="modal-mask" v-if="pendingMove" @click.self="pendingMove=null">
     <div class="modal">
       <div class="modal-icon" :class="pendingMove.dir==='out' || pendingMove.dir==='transfer' ? 'danger' : 'warn'">
@@ -976,7 +1107,7 @@
     </div>
   </div>
 
-  <div class="toast" v-if="toast">{{ toast }}</div>
+  <div class="toast" v-if="toast && !bulkPrice.product && !correction.open && !intake.review">{{ toast }}</div>
 </div>
 
 <script>
@@ -987,6 +1118,19 @@ let authVersion = 0;
 const readCookie = name => document.cookie.split('; ').find(v => v.startsWith(name+'='))?.split('=').slice(1).join('=') || '';
 const newRequestId = prefix => prefix + '-' + ((typeof crypto !== 'undefined' && crypto.randomUUID)
   ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2)));
+const moneyValue = value => {
+  const text = String(value).trim(), number = Number(text);
+  return /^\d+(\.\d{1,2})?$/.test(text) && Number.isFinite(number) && Number.isSafeInteger(Math.round(number * 100)) ? number : null;
+};
+const quantityValue = value => {
+  const text = String(value).trim(), number = Number(text);
+  return /^\d+$/.test(text) && Number.isSafeInteger(number) && number <= 2147483647 ? number : null;
+};
+const operationState = () => ({loading:false, saving:false, error:'', reloadRequired:false, attempt:null});
+const bulkPriceState = () => ({...operationState(), product:null, rows:[], changePrice:false, changeCost:false, price:'', cost:''});
+const correctionState = store => ({...operationState(), open:false, store, barcode:'', sku:null, actual:'', note:'', readVersion:0});
+const intakeState = store => ({...operationState(), store, colors:'', sizes:'', price:'0', cost:'0', quantity:'0', safety_stock:'0', variants:[], lastDefaults:null, review:null,
+  label:{composition:'', execution_standard:'', label_usage:'', safety_category:'', label_verified:false}});
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, ch => ({
   '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;'
 }[ch]));
@@ -1030,7 +1174,10 @@ createApp({
       refundQty: {},
       // 库存
       skus: [], transfers: [], transferDraft: [], transferTarget: '', transferNote: '', transferRequestId: '', transferSubmitting: false, transferBatches: [], batchReceive: null, batchReceiveValues: {}, batchReceiveSubmitting: false, counts: [], countStore: STORES[0], countNote: '', countDetail: null, countActual: {}, stockKeyword: '', lowOnly: false, includeInactive: false,
-      stockStore: localStorage.getItem('pos_store') || STORES[0],
+      stockStore: localStorage.getItem('pos_store') || STORES[0], stockViewVersion: 0,
+      skuPriceSku: null, skuPriceForm: {price:'', cost:''}, skuPriceVersion: null,
+      skuPriceLoading: false, skuPriceSaving: false, skuPriceError: '', skuPriceReloadRequired: false, skuPriceViewVersion: 0,
+      bulkPrice: bulkPriceState(), correction: correctionState(STORES[0]), intake: intakeState(localStorage.getItem('pos_store') || STORES[0]), intakeCatalog: {},
       batchReceiveRequest: null, batchReceiveOwnerId: null, batchReceiveError: '',
       countSubmitting: false, countLoading: false, countError: '', countReloadRequired: false, countViewVersion: 0,
       // 商品
@@ -1059,6 +1206,10 @@ createApp({
         this.resetFinancialViews();
         this.resetCountView();
         this.closeBarcode();
+        this.resetSkuPricing();
+        this.bulkPrice = bulkPriceState(); this.correction = correctionState(this.currentStore); this.intake = intakeState(this.currentStore); this.intakeCatalog = {};
+        this.np = {code:'', name:'', category:'', brand:'', tag_price:0}; this.products = [];
+        this.stockViewVersion += 1; this.skus = [];
         this.closeStoreMenu();
         this.productCategories = []; this.productCatalogLoading = false; this.productCatalogError = '';
       },
@@ -1084,6 +1235,12 @@ createApp({
     },
   },
   computed: {
+    bulkSelected() { return this.bulkPrice.rows.filter(s => s.selected); },
+    correctionDelta() { const actual = quantityValue(this.correction.actual); return this.correction.sku && actual !== null ? actual - this.correction.sku.quantity : null; },
+    intakeStandards() { return (this.intakeCatalog.execution_standards || []).filter(s => !this.np.category || s.categories?.includes(this.np.category)); },
+    intakeUsage() { return (this.intakeCatalog.usages || []).find(u => u.value === this.intake.label.label_usage); },
+    intakeSafety() { return (this.intakeCatalog.safety_categories || []).find(s => s.value === this.intake.label.safety_category); },
+    hasManagementPending() { return [this.bulkPrice, this.correction, this.intake].some(s => s.saving || s.attempt); },
     labelDirty() {
       if (!this.labelForm || !this.labelInfo) return false;
       return Object.keys(this.labelForm).some(key => (this.labelForm[key] ?? '') !== (this.labelInfo.configuration?.[key] ?? ''));
@@ -1128,14 +1285,17 @@ createApp({
     },
   },
   methods: {
+    guardPendingManagement(event){ if (this.hasManagementPending) { event.preventDefault(); event.returnValue = ''; } },
     flash(msg){ this.toast = msg; setTimeout(()=> this.toast='', 1800); },
 
     // ---------- 门店选择 ----------
     toggleStoreMenu(){
+      if (this.hasManagementPending) return;
       if (!this.isManager || this.checkingOut || this.checkoutAttempt || this.pendingScans) return;
       this.storeMenuOpen ? this.closeStoreMenu() : this.openStoreMenu();
     },
     openStoreMenu(){
+      if (this.hasManagementPending) return;
       if (!this.isManager || this.checkingOut || this.checkoutAttempt || this.pendingScans) return;
       const currentIndex = this.stores.indexOf(this.currentStore);
       this.storeMenuIndex = currentIndex >= 0 ? currentIndex : 0;
@@ -1158,6 +1318,7 @@ createApp({
       this.focusStoreOptionAt((this.storeMenuIndex + step + length) % length);
     },
     selectCurrentStore(store){
+      if (this.hasManagementPending) return this.flash('请先确认上次管理操作的结果');
       if (!this.isManager || !this.stores.includes(store)) return;
       if (store !== this.currentStore && (this.cart.length || this.pendingScans || this.checkingOut || this.checkoutAttempt)) {
         this.closeStoreMenu();
@@ -1188,6 +1349,7 @@ createApp({
       finally { this.loggingIn = false; }
     },
     async logout(){
+      if (this.hasManagementPending) return this.flash('请先确认上次管理操作的结果');
       if (this.loggingOut) return;
       if (this.checkingOut) return this.flash('正在结算，请等待结算完成后再退出');
       if (this.checkoutAttempt) return this.flash('上一笔结算结果待确认，请先重试结算');
@@ -1241,6 +1403,8 @@ createApp({
     goPos(){ this.tab='pos'; this.$nextTick(()=> this.$refs.scan && this.$refs.scan.focus()); },
 
     async loadStock(){
+      if (!this.me) return;
+      const owner = authVersion, view = ++this.stockViewVersion;
       try {
         const q = new URLSearchParams();
         if (this.stockStore === 'all' && !this.isManager) this.stockStore = this.currentStore;
@@ -1248,13 +1412,15 @@ createApp({
         if (this.stockKeyword) q.set('keyword', this.stockKeyword);
         if (this.lowOnly) q.set('low_stock', 'true');
         if (this.includeInactive && this.isManager) q.set('include_inactive', 'true');
-        this.skus = (await api('/api/skus?'+q)).map(s=> ({...s, _qty: 1}));
+        const rows = await api('/api/skus?'+q);
+        if (owner !== authVersion || view !== this.stockViewVersion) return;
+        this.skus = rows.map(s=> ({...s, _qty: 1}));
         if (this.isManager) {
           if (!this.countStore || !this.stores.includes(this.countStore)) this.countStore = this.currentStore;
           if (!this.transferTarget || this.transferTarget === this.stockStore) this.transferTarget = this.transferTargetsForDraft[0] || '';
           this.loadTransferBatches(); this.loadCounts();
         }
-      } catch(e){ this.flash(e.message); }
+      } catch(e){ if (owner === authVersion && view === this.stockViewVersion) this.flash(e.message); }
     },
     askMove(s, dir){
       const qty = s._qty || 1;
@@ -1600,6 +1766,222 @@ createApp({
         },
       };
     },
+    async submitWorkflow(key, url, payload, onSuccess){
+      const state = this[key], owner = authVersion;
+      if (!this.isManager || state.saving || state.loading || state.reloadRequired) return;
+      // Keep the exact request through uncertain network failures, including lost responses after commit.
+      if (!state.attempt) state.attempt = JSON.stringify({...payload, client_request_id:newRequestId(key)});
+      state.saving = true; state.error = '';
+      try {
+        const result = await api(url, {method:'POST', body:state.attempt});
+        if (owner !== authVersion || this[key] !== state) return;
+        state.attempt = null;
+        onSuccess(result);
+      } catch(e) {
+        if (owner !== authVersion || this[key] !== state) return;
+        const uncertain = !e.status || e.status >= 500 || e.status === 408 || e.status === 429;
+        state.error = uncertain ? '结果尚未确认，请重试确认同一次操作。'+e.message : e.message;
+        if (!uncertain) {
+          state.attempt = null;
+          if (key !== 'intake' && (e.status === 409 || e.status === 404)) state.reloadRequired = true;
+        }
+      } finally { if (owner === authVersion && this[key] === state) state.saving = false; }
+    },
+    async openBulkPricing(product){
+      if (!this.isManager || this.hasManagementPending) return;
+      if (this.checkingOut || this.checkoutAttempt || this.pendingScans) return this.flash('请先完成扫码并确认当前结算结果');
+      this.bulkPrice = {...bulkPriceState(), product:{...product}};
+      await this.reloadBulkPricing();
+    },
+    async reloadBulkPricing(){
+      const state = this.bulkPrice, owner = authVersion;
+      if (!this.isManager || !state.product || state.saving || state.attempt || state.loading) return;
+      const selected = new Set(state.rows.filter(s => s.selected).map(s => s.id));
+      state.loading = true; state.reloadRequired = true; state.error = '';
+      try {
+        const query = new URLSearchParams({product_id:state.product.id, store:this.currentStore, include_inactive:'true'});
+        const rows = await api('/api/skus?'+query);
+        if (owner !== authVersion || this.bulkPrice !== state) return;
+        if (rows.some(s => !Number.isSafeInteger(s.version) || s.version < 0)) throw new Error('价格版本缺失，请更新服务后重试');
+        state.rows = rows.map(s => ({...s, selected:selected.has(s.id)})); state.reloadRequired = false;
+      } catch(e) { if (owner === authVersion && this.bulkPrice === state) state.error = e.message; }
+      finally { if (owner === authVersion && this.bulkPrice === state) state.loading = false; }
+    },
+    selectBulkRows(selected){
+      if (this.bulkPrice.saving || this.bulkPrice.attempt || this.bulkPrice.loading || this.bulkPrice.reloadRequired) return;
+      this.bulkPrice.rows.forEach(s => s.selected = selected);
+    },
+    closeBulkPricing(){ if (!this.bulkPrice.saving && !this.bulkPrice.attempt) this.bulkPrice = bulkPriceState(); },
+    async saveBulkPricing(){
+      const state = this.bulkPrice;
+      if (!this.isManager || !state.product || state.saving || state.loading || state.reloadRequired) return;
+      if (!state.attempt && (this.checkingOut || this.checkoutAttempt)) return this.flash('请先确认当前结算结果');
+      const payload = {product_id:state.product.id, items:this.bulkSelected.map(s => ({sku_id:s.id, expected_version:s.version}))};
+      if (!state.attempt) {
+        if (!payload.items.length || (!state.changeCost && !state.changePrice)) { state.error = '请选择规格和要修改的金额'; return; }
+        if (payload.items.length>500) { state.error = '一次最多选择 500 个规格'; return; }
+        for (const key of ['price','cost']) if (state[key==='price' ? 'changePrice' : 'changeCost']) {
+          const value = moneyValue(state[key]);
+          if (value === null) { state.error = '金额须为非负数，最多两位小数'; return; }
+          payload[key] = value;
+        }
+        if (payload.items.some(s => !Number.isSafeInteger(s.expected_version) || s.expected_version < 0)) { state.error = '请重新读取规格'; state.reloadRequired = true; return; }
+      }
+      const changesPrice = state.attempt ? Object.hasOwn(JSON.parse(state.attempt),'price') : state.changePrice;
+      await this.submitWorkflow('bulkPrice', '/api/skus/pricing/batch', payload, result => {
+        this.stockViewVersion += 1;
+        const updates = new Map(result.items.map(s => [s.id,s]));
+        this.skus = this.skus.map(s => updates.has(s.id) ? {...s,...updates.get(s.id)} : s);
+        if (changesPrice && !this.checkingOut && !this.checkoutAttempt) this.cart = this.cart.map(s => updates.has(s.id) ? {...s,price:updates.get(s.id).price} : s);
+        if (updates.has(this.barcodeSku?.id)) this.closeBarcode();
+        this.bulkPrice = bulkPriceState(); this.flash('已更新 '+result.changed_count+' 个规格'); this.loadStock();
+      });
+    },
+    buildIntakeVariants(){
+      const state = this.intake;
+      if (!this.isManager || state.saving || state.attempt) return;
+      const split = value => [...new Set(value.split(/[,，]/).map(s => s.trim()).filter(Boolean))];
+      const colors = split(state.colors), sizes = split(state.sizes);
+      if (!colors.length || !sizes.length || colors.length*sizes.length>500) { state.error = '请填写颜色和尺码，单次最多 500 个规格'; return; }
+      const price = moneyValue(state.price), cost = moneyValue(state.cost), quantity = quantityValue(state.quantity), safety_stock = quantityValue(state.safety_stock);
+      if ([price,cost,quantity,safety_stock].includes(null)) { state.error = '请核对默认金额和数量，数量须为非负整数'; return; }
+      const old = new Map(state.variants.map(v => [JSON.stringify([v.color,v.size]),v]));
+      const defaults = {price,cost,quantity,safety_stock};
+      state.variants = colors.flatMap(color => sizes.map(size => {
+        const prior = old.get(JSON.stringify([color,size]));
+        if (!prior) return {color,size,...Object.fromEntries(Object.entries(defaults).map(([key,value])=>[key,String(value)]))};
+        const row = {...prior};
+        for (const key of Object.keys(defaults)) {
+          const number = ['price','cost'].includes(key) ? moneyValue(row[key]) : quantityValue(row[key]);
+          if (state.lastDefaults && number === state.lastDefaults[key]) row[key] = String(defaults[key]);
+        }
+        return row;
+      }));
+      state.lastDefaults = defaults;
+      state.error = ''; state.review = null;
+    },
+    reviewIntake(){
+      const state = this.intake;
+      if (!this.isManager || state.saving) return;
+      if (state.attempt) { state.review = JSON.parse(state.attempt); return; }
+      const product = {...this.np, code:this.np.code.trim(), name:this.np.name.trim(), tag_price:moneyValue(this.np.tag_price)};
+      if (!product.code || !product.name || product.tag_price === null || !this.stores.includes(state.store) || !state.variants.length) { state.error = '请填写款号、款名，核对吊牌价、门店和规格'; return; }
+      const variants = state.variants.map(v => ({color:v.color,size:v.size,price:moneyValue(v.price),cost:moneyValue(v.cost),quantity:quantityValue(v.quantity),safety_stock:quantityValue(v.safety_stock)}));
+      if (variants.some(v => [v.price,v.cost,v.quantity,v.safety_stock].includes(null))) { state.error = '请核对规格金额和数量，金额最多两位小数，数量须为非负整数'; return; }
+      const label = Object.fromEntries(Object.entries(state.label).map(([key,value]) => [key, typeof value === 'string' ? value.trim() || null : value]));
+      state.review = {product,label,store:state.store,variants}; state.error = '';
+    },
+    closeIntakeReview(){ if (!this.intake.saving && !this.intake.attempt) this.intake.review = null; },
+    async saveIntake(){
+      if (!this.isManager || !this.intake.review) return;
+      await this.submitWorkflow('intake', '/api/products/intake', this.intake.review, result => {
+        this.intake = intakeState(result.store); this.np = {code:'',name:'',category:'',brand:'',tag_price:0};
+        this.stockViewVersion += 1; this.flash('已录入 '+result.created_count+' 个规格，库存进入'+result.store); this.loadProducts();
+      });
+    },
+    async openCorrection(sku=null){
+      if (!this.isManager || this.hasManagementPending) return;
+      if (this.checkingOut || this.checkoutAttempt) return this.flash('请先确认当前结算结果');
+      if (sku && this.stockStore === 'all') return this.flash('请先选择具体门店');
+      const store = this.stockStore === 'all' ? this.currentStore : this.stockStore;
+      this.correction = {...correctionState(store), open:true, barcode:sku?.barcode || ''};
+      if (sku) await this.loadCorrection(sku.id);
+      else this.$nextTick(()=>document.getElementById('correction-barcode')?.focus());
+    },
+    invalidateCorrection(){
+      const state = this.correction;
+      if (state.saving || state.attempt) return;
+      state.readVersion += 1; state.sku = null; state.actual = ''; state.reloadRequired = false; state.error = '';
+    },
+    async loadCorrection(id=null){
+      const state = this.correction, owner = authVersion;
+      if (!this.isManager || !state.open || state.saving || state.attempt || state.loading) return;
+      const barcode = state.barcode.trim();
+      if (!barcode || !this.stores.includes(state.store)) { state.error = '请选择门店并输入条码'; return; }
+      const view = ++state.readVersion;
+      state.loading = true; state.reloadRequired = true; state.error = ''; state.sku = null; state.actual = '';
+      try {
+        let sku;
+        if (Number.isInteger(id)) sku = await api('/api/skus/'+id+'?store='+encodeURIComponent(state.store));
+        else {
+          const rows = await api('/api/skus?'+new URLSearchParams({keyword:barcode,store:state.store,include_inactive:'true'}));
+          sku = rows.find(s => s.barcode === barcode);
+        }
+        if (owner !== authVersion || this.correction !== state || view !== state.readVersion) return;
+        if (!sku) throw new Error('未找到该条码');
+        if (!sku.inventory_updated_at || !Number.isSafeInteger(sku.quantity)) throw new Error('库存快照缺失，请更新服务后重试');
+        state.sku = sku; state.reloadRequired = false;
+      } catch(e) { if (owner === authVersion && this.correction === state && view === state.readVersion) state.error = e.message; }
+      finally { if (owner === authVersion && this.correction === state && view === state.readVersion) state.loading = false; }
+    },
+    closeCorrection(){ if (!this.correction.saving && !this.correction.attempt) this.correction = correctionState(this.currentStore); },
+    async saveCorrection(){
+      const state = this.correction;
+      if (!this.isManager || !state.sku || state.saving || state.loading || state.reloadRequired) return;
+      const actual = quantityValue(state.actual), note = state.note.trim();
+      if (!state.attempt && (actual === null || !note)) { state.error = '请填写实盘数量（非负整数）和纠错原因'; return; }
+      const payload = {sku_id:state.sku.id, store:state.store, expected_quantity:state.sku.quantity,
+        expected_updated_at:state.sku.inventory_updated_at, actual_qty:actual, note};
+      await this.submitWorkflow('correction', '/api/stock/corrections', payload, result => {
+        this.stockViewVersion += 1;
+        if (this.stockStore === result.store) this.skus = this.skus.map(s => s.id === result.sku_id ? {...s,quantity:result.quantity,inventory_updated_at:result.inventory_updated_at,low_stock:result.quantity<=s.safety_stock} : s);
+        this.correction = correctionState(this.currentStore); this.flash('库存已纠正：'+result.before_quantity+' → '+result.quantity); this.loadStock();
+      });
+    },
+    async openSkuPricing(s){
+      if (!this.isManager || this.skuPriceSaving) return;
+      if (this.checkingOut || this.checkoutAttempt) return this.flash('请先确认当前结算结果，再修改价格');
+      this.resetSkuPricing();
+      this.skuPriceSku = {...s};
+      await this.reloadSkuPricing();
+    },
+    async reloadSkuPricing(){
+      if (!this.isManager || !this.skuPriceSku || this.skuPriceSaving) return;
+      const id = this.skuPriceSku.id, owner = authVersion, view = ++this.skuPriceViewVersion;
+      this.skuPriceLoading = true; this.skuPriceError = ''; this.skuPriceReloadRequired = true;
+      this.skuPriceVersion = null;
+      try {
+        const data = await api('/api/skus/'+id+'?store='+encodeURIComponent(this.stockStore === 'all' ? this.currentStore : this.stockStore));
+        if (owner !== authVersion || view !== this.skuPriceViewVersion) return;
+        if (!Number.isSafeInteger(data.version) || data.version < 0) throw new Error('价格资料版本缺失，请更新服务后重试');
+        this.skuPriceSku = data;
+        this.skuPriceForm = {price:String(data.price), cost:String(data.cost)};
+        this.skuPriceVersion = data.version; this.skuPriceReloadRequired = false;
+      } catch(e) {
+        if (owner === authVersion && view === this.skuPriceViewVersion) this.skuPriceError = e.message;
+      } finally { if (owner === authVersion && view === this.skuPriceViewVersion) this.skuPriceLoading = false; }
+    },
+    closeSkuPricing(){
+      if (!this.skuPriceSaving) this.resetSkuPricing();
+    },
+    resetSkuPricing(){
+      this.skuPriceViewVersion += 1; this.skuPriceSku = null;
+      this.skuPriceForm = {price:'', cost:''}; this.skuPriceVersion = null;
+      this.skuPriceLoading = false; this.skuPriceSaving = false;
+      this.skuPriceError = ''; this.skuPriceReloadRequired = false;
+    },
+    async saveSkuPricing(){
+      if (!this.isManager || !this.skuPriceSku || this.skuPriceSaving || this.skuPriceLoading || this.skuPriceReloadRequired) return;
+      const price = moneyValue(this.skuPriceForm.price), cost = moneyValue(this.skuPriceForm.cost);
+      if (price === null || cost === null) { this.skuPriceError = '成本和售价须为非负金额，最多两位小数'; return; }
+      if (!Number.isSafeInteger(this.skuPriceVersion)) { this.skuPriceError = '请重新加载价格资料'; this.skuPriceReloadRequired = true; return; }
+      const id = this.skuPriceSku.id, owner = authVersion, view = this.skuPriceViewVersion;
+      this.skuPriceSaving = true; this.skuPriceError = '';
+      try {
+        const saved = await api('/api/skus/'+id, {method:'PUT', body:JSON.stringify({price, cost, expected_version:this.skuPriceVersion})});
+        if (owner !== authVersion || view !== this.skuPriceViewVersion) return;
+        this.stockViewVersion += 1;
+        this.skus = this.skus.map(s => s.id === id ? {...s, price:saved.price, cost:saved.cost, version:saved.version} : s);
+        if (!this.checkingOut && !this.checkoutAttempt) this.cart = this.cart.map(s => s.id === id ? {...s, price:saved.price} : s);
+        if (this.barcodeSku?.id === id) this.closeBarcode();
+        this.resetSkuPricing(); this.flash('成本和售价已保存'); this.loadStock();
+      } catch(e) {
+        if (owner === authVersion && view === this.skuPriceViewVersion) {
+          this.skuPriceError = e.message;
+          if (e.status === 409 || e.status === 404) this.skuPriceReloadRequired = true;
+        }
+      } finally { if (owner === authVersion && view === this.skuPriceViewVersion) this.skuPriceSaving = false; }
+    },
     async showBarcode(s){
       if (!this.me) return;
       this.closeBarcode();
@@ -1690,6 +2072,7 @@ createApp({
         const catalog = await api('/api/products/label-catalog');
         if (owner !== authVersion) return;
         this.productCategories = catalog.categories || [];
+        this.intakeCatalog = catalog;
       } catch(e){
         if (owner === authVersion) this.productCatalogError = e.message;
       } finally { if (owner === authVersion) this.productCatalogLoading = false; }
@@ -1771,6 +2154,7 @@ createApp({
       item.qty = qty;
     },
     async scan(){
+      if (this.hasManagementPending) return this.flash('请先确认上次管理操作的结果');
       if (!this.me || this.loggingOut) return;
       if (this.checkingOut) return this.flash('正在结算，请完成后再扫描下一单');
       if (this.checkoutAttempt) return this.flash('上一笔结算结果待确认，请先重试结算');
@@ -1794,6 +2178,7 @@ createApp({
       }
     },
     async checkout(){
+      if (this.hasManagementPending) return this.flash('请先确认上次管理操作的结果');
       if (!this.me || this.loggingOut || this.checkingOut || !this.cart.length) return;
       if (this.pendingScans) return this.flash('条码仍在查询中，请稍后结算');
       if (!this.checkoutAttempt && this.scanInput.trim()) return this.flash('条码尚未加入购物车，请先完成扫码或清空输入');
@@ -1979,10 +2364,12 @@ createApp({
       this.me = null;
     };
     document.addEventListener('pointerdown', this.handleStorePickerOutside);
+    window.addEventListener('beforeunload', this.guardPendingManagement);
     this.fetchMe();
   },
   beforeUnmount(){
     document.removeEventListener('pointerdown', this.handleStorePickerOutside);
+    window.removeEventListener('beforeunload', this.guardPendingManagement);
   }
 }).mount('#app');
 </script>

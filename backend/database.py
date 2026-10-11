@@ -102,6 +102,7 @@ def _ensure_runtime_schema() -> None:
                 "on app_user(lower(username))"
             ))
             conn.execute(text("alter table sku add column if not exists active boolean not null default true"))
+            conn.execute(text("alter table sku add column if not exists version integer not null default 0"))
             conn.execute(text("create index if not exists ix_sku_active on sku(active)"))
             conn.execute(text("alter table auth_token add column if not exists csrf_hash varchar"))
             conn.execute(text(
@@ -212,6 +213,8 @@ def _ensure_runtime_schema() -> None:
             transfer_names = {row[1] for row in transfer_cols}
             if "active" not in sku_names:
                 conn.execute(text("alter table sku add column active boolean not null default 1"))
+            if "version" not in sku_names:
+                conn.execute(text("alter table sku add column version integer not null default 0"))
             conn.execute(text("create index if not exists ix_sku_active on sku(active)"))
             if "csrf_hash" not in auth_names:
                 conn.execute(text("alter table auth_token add column csrf_hash varchar"))
