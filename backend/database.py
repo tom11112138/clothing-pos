@@ -90,6 +90,9 @@ def _ensure_runtime_schema() -> None:
     with engine.begin() as conn:
         dialect = conn.dialect.name
         if dialect == "postgresql":
+            conn.execute(text("alter table salesorder add column if not exists payment_method varchar"))
+            conn.execute(text("create index if not exists ix_salesorder_store_created_at on salesorder(store, created_at)"))
+            conn.execute(text("create index if not exists ix_salesrefund_store_created_at on salesrefund(store, created_at)"))
             for name in ("composition", "execution_standard", "label_usage", "safety_category"):
                 conn.execute(text(f"alter table product add column if not exists {name} varchar"))
             conn.execute(text("alter table product add column if not exists label_verified boolean not null default false"))
@@ -191,6 +194,10 @@ def _ensure_runtime_schema() -> None:
             ))
             cols = conn.execute(text("pragma table_info(salesorder)")).fetchall()
             names = {row[1] for row in cols}
+            if "payment_method" not in names:
+                conn.execute(text("alter table salesorder add column payment_method varchar"))
+            conn.execute(text("create index if not exists ix_salesorder_store_created_at on salesorder(store, created_at)"))
+            conn.execute(text("create index if not exists ix_salesrefund_store_created_at on salesrefund(store, created_at)"))
             log_cols = conn.execute(text("pragma table_info(stocklog)")).fetchall()
             log_names = {row[1] for row in log_cols}
             sku_cols = conn.execute(text("pragma table_info(sku)")).fetchall()

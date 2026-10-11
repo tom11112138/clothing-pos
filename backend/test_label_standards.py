@@ -6,11 +6,12 @@ from label_standards import EXECUTION_STANDARDS, label_issues, normalize_categor
 
 
 class StandardsCatalogTests(unittest.TestCase):
-    def test_all_twelve_categories_have_specific_standard_candidates(self):
+    def test_all_eighteen_categories_have_specific_standard_candidates(self):
         catalog = standards_catalog()
         names = [category["name"] for category in catalog["categories"]]
         self.assertEqual(names, ["羊绒衫", "牛仔裤", "风衣", "连衣裙", "羽绒服", "羊绒大衣",
-                                 "休闲裤", "衬衫", "半袖", "棉服", "套装", "针织衫"])
+                                 "休闲裤", "衬衫", "半袖", "棉服", "套装", "针织衫",
+                                 "T恤衫", "小衫", "裤子", "上衣", "半裙", "马甲"])
         codes = [item["code"] for item in catalog["execution_standards"]]
         self.assertEqual(len(codes), len(set(codes)))
         self.assertEqual(len(codes), 19)
@@ -29,6 +30,12 @@ class StandardsCatalogTests(unittest.TestCase):
             "连衣裙": {"FZ/T 81004-2022", "FZ/T 73026-2014"},
             "羽绒服": {"GB/T 14272-2021", "FZ/T 73053-2015"},
             "半袖": {"GB/T 22849-2024", "GB/T 2660-2017", "FZ/T 73043-2020"},
+            "T恤衫": {"GB/T 22849-2024"},
+            "小衫": {"FZ/T 81007-2022", "FZ/T 73020-2019", "GB/T 2660-2017", "FZ/T 73043-2020"},
+            "裤子": {"FZ/T 81007-2022", "FZ/T 73020-2019", "FZ/T 81006-2017", "FZ/T 73032-2017"},
+            "上衣": {"FZ/T 81007-2022", "FZ/T 73020-2019", "GB/T 2660-2017", "FZ/T 73043-2020", "GB/T 22849-2024"},
+            "半裙": {"FZ/T 81007-2022", "FZ/T 73026-2014"},
+            "马甲": {"FZ/T 81007-2022", "FZ/T 73020-2019"},
         }
         for category, codes in expected.items():
             self.assertEqual({item["code"] for item in EXECUTION_STANDARDS if category in item["categories"]}, codes)
@@ -55,6 +62,8 @@ class StandardsCatalogTests(unittest.TestCase):
         self.assertIn("额外安全要求", usages["child_skin"]["description"])
 
     def test_catalog_exclusions_also_guard_confirmed_infant_labels(self):
+        for code in ("FZ/T 73020-2019", "FZ/T 73032-2017"):
+            self.assertTrue(next(item for item in EXECUTION_STANDARDS if item["code"] == code)["excludes_infant"])
         config = {"composition": "100%棉", "execution_standard": "", "label_usage": "infant",
                   "safety_category": "A", "label_verified": True}
         for standard in EXECUTION_STANDARDS:

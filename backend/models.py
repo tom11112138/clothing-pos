@@ -182,6 +182,7 @@ class SalesOrder(SQLModel, table=True):
     total_cents: int = 0                                # 应收合计（分）
     refunded_cents: int = 0                             # 已退金额累计（分）
     status: str = "paid"                                # paid / partial_refunded / refunded
+    payment_method: Optional[str] = None                 # cash / wechat / alipay / card; legacy orders unknown
     note: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now, index=True)
 

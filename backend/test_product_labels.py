@@ -91,7 +91,23 @@ class ProductLabelTests(unittest.TestCase):
             self.assertEqual(product.label_version, 2)
             preview = sku_retail_label(self.sku_id, "tag", manager, session)
             self.assertEqual(preview["product_category"], "半袖")
-            self.assertEqual(len(preview["standards"]["categories"]), 12)
+            self.assertEqual(len(preview["standards"]["categories"]), 18)
+
+    def test_new_categories_are_preserved_in_product_entry_and_barcode_labels(self):
+        for index, category in enumerate(("T恤衫", "小衫", "裤子", "上衣", "半裙", "马甲")):
+            with self.subTest(category=category), Session(self.engine) as session:
+                manager = session.get(User, self.manager_id)
+                created = create_product(ProductCreate(code=f"NEW-{index}", name=category, category=category), manager, session)
+                self.assertEqual(created.category, category)
+                update_product(self.product_id, ProductUpdate(category=category), manager, session)
+                preview = sku_retail_label(self.sku_id, "tag", manager, session)
+                self.assertEqual(preview["product_category"], category)
+                self.assertIn(category, [item["name"] for item in preview["standards"]["categories"]])
+                self.assertEqual(preview["barcode"], "TS001015")
+                self.assertFalse(preview["printable"])
+                self.assertIsNone(session.get(Product, self.product_id).execution_standard)
+                self.assertIsNone(session.get(Product, self.product_id).safety_category)
+                self.assertEqual(session.exec(select(Inventory)).one().quantity, 7)
 
     def test_catalog_route_precedes_product_id_route_and_requires_login(self):
         import asyncio
@@ -116,7 +132,7 @@ class ProductLabelTests(unittest.TestCase):
         app.dependency_overrides[get_current_user] = lambda: User(username="staff", password_hash="unused", role="staff")
         status, body = asyncio.run(request())
         self.assertEqual(status, 200)
-        self.assertEqual(len(body["categories"]), 12)
+        self.assertEqual(len(body["categories"]), 18)
         self.assertEqual(len(body["execution_standards"]), 19)
 
     def test_incomplete_or_unsafe_confirmation_does_not_change_metadata(self):

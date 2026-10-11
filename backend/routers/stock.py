@@ -128,6 +128,8 @@ def _sale_result(order: SalesOrder, items: list[dict]) -> dict:
         "order_no": order.order_no,
         "total": round(order.total_cents / 100, 2),
         "item_count": order.item_count,
+        "payment_method": order.payment_method,
+        "note": order.note,
         "items": items,
     }
 
@@ -1037,7 +1039,7 @@ def create_sale(
             raise HTTPException(400, "每件商品需提供 sku_id 或 barcode")
         if not sku:
             raise HTTPException(404, f"找不到商品：{item.sku_id or item.barcode}")
-        if not sku.active:
+        if not sku.active and not existing:
             raise HTTPException(400, f"{sku.barcode} 已停用，不能销售")
         if sku.id not in merged:
             product = session.get(Product, sku.product_id)
@@ -1048,14 +1050,21 @@ def create_sale(
             order_seq.append(sku.id)
         merged[sku.id]["qty"] += item.qty
 
+    note = (data.note or "").strip() or None
+    request_content = {"store": store, "user_id": user.id,
+                       "items": [[sid, merged[sid]["qty"]] for sid in sorted(merged)]}
+    # Keep pre-upgrade retries readable without inventing a historical payment method.
+    if not existing or existing.payment_method is not None:
+        request_content.update(payment_method=data.payment_method, note=note)
+    elif data.payment_method != "cash" or note is not None:
+        raise HTTPException(409, "历史收银请求不能补改支付方式或备注")
     request_hash = hashlib.sha256(json.dumps(
-        {"store": store, "user_id": user.id,
-         "items": [[sid, merged[sid]["qty"]] for sid in sorted(merged)]},
+        request_content,
         ensure_ascii=False, separators=(",", ":"),
     ).encode("utf-8")).hexdigest()
     if existing:
         if existing.request_hash and existing.request_hash != request_hash:
-            raise HTTPException(409, "同一收银请求号的商品内容不一致")
+            raise HTTPException(409, "同一收银请求号的商品、支付方式或备注不一致")
         return _existing_sale_result(session, existing)
 
     # 2) 逐件原子扣减，任一不足整单回滚
@@ -1075,6 +1084,8 @@ def create_sale(
         operator=user.username,
         operator_user_id=user.id,
         status="paid",
+        payment_method=data.payment_method,
+        note=note,
     )
     session.add(order)
     session.flush()  # 拿到 order.id
@@ -1114,7 +1125,8 @@ def create_sale(
         session, action="sale.create", entity_type="sales_order",
         entity_id=order.id, actor=user, store=store,
         request_id=data.client_request_id,
-        detail={"item_count": item_count, "total_cents": total_cents},
+        detail={"item_count": item_count, "total_cents": total_cents,
+                "payment_method": data.payment_method, "note": note},
     )
     try:
         session.commit()
@@ -1125,7 +1137,7 @@ def create_sale(
         ).first()
         if existing:
             if existing.request_hash and existing.request_hash != request_hash:
-                raise HTTPException(409, "同一收银请求号的商品内容不一致")
+                raise HTTPException(409, "同一收银请求号的商品、支付方式或备注不一致")
             if (
                 existing.store != store
                 or (existing.operator_user_id is not None and existing.operator_user_id != user.id)

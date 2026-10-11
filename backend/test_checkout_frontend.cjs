@@ -302,7 +302,7 @@ test('a failed checkout keeps its cart and request ID for an unchanged retry', a
   await app.state.checkout();
   assert.equal(app.state.checkingOut, false);
   assert.equal(app.state.cart.length, 1);
-  assert.equal(app.focused(), 1);
+  assert.equal(app.focused(), 0);
   app.network.send = async () => response();
   await app.state.checkout();
   assert.deepEqual(app.requests[0], app.requests[1]);
@@ -340,9 +340,66 @@ test('a stale initial session lookup cannot overwrite a more recent login', asyn
 });
 
 test('checkout inputs and commands are wired to guarded handlers', () => {
-  assert.match(html, /ref="scan"[^>]+:disabled="checkingOut"/);
-  assert.match(html, /@change="setCartQty\(c\.id, \$event\)" :disabled="checkingOut \|\| pendingScans > 0"/);
-  assert.match(html, /@click="removeCartItem\(c\.id\)" :disabled="checkingOut \|\| pendingScans > 0"/);
+  assert.match(html, /ref="scan"[^>]+:disabled="checkingOut \|\| !!checkoutAttempt"/);
+  assert.match(html, /@change="setCartQty\(c\.id, \$event\)" :disabled="checkingOut \|\| pendingScans > 0 \|\| !!checkoutAttempt"/);
+  assert.match(html, /@click="removeCartItem\(c\.id\)" :disabled="checkingOut \|\| pendingScans > 0 \|\| !!checkoutAttempt"/);
   assert.match(html, /@click="checkout" :disabled="!cart\.length \|\| checkingOut \|\| pendingScans > 0"/);
   assert.doesNotMatch(html, /@click="cart(?:=|\.)/);
+});
+
+test('four payment modes and a trimmed note are included in checkout and reset after success', async () => {
+  const app = harness();
+  for (const method of ['cash','wechat','alipay','card']) {
+    app.state.cart = [sku()];
+    app.state.selectPayment(method);
+    app.state.setSaleNote({target:{value:'  gift\nexchange  '}});
+    await app.state.checkout();
+    assert.equal(app.requests.at(-1).body.payment_method, method);
+    assert.equal(app.requests.at(-1).body.note, 'gift\nexchange');
+    assert.equal(app.state.paymentMethod, 'cash');
+    assert.equal(app.state.saleNote, '');
+  }
+});
+
+test('an uncertain checkout freezes cart, payment and note until an identical retry succeeds', async () => {
+  const app = harness();
+  app.state.cart = [sku()];
+  app.state.selectPayment('wechat');
+  app.state.setSaleNote({target:{value:'gift'}});
+  app.network.send = async () => { throw new Error('Response lost'); };
+  await app.state.checkout();
+  const first = app.requests[0];
+  app.state.selectPayment('card');
+  const note = {target:{value:'different'}};
+  app.state.setSaleNote(note);
+  app.state.setCartQty(1, {target:{value:'3'}});
+  app.state.removeCartItem(1);
+  app.state.clearCart();
+  await scan(app, 'SKU-2');
+  await app.state.logout();
+  assert.equal(app.state.paymentMethod, 'wechat');
+  assert.equal(app.state.saleNote, 'gift');
+  assert.equal(note.target.value, 'gift');
+  assert.equal(app.state.cart[0].qty, 1);
+  assert.equal(app.state.me.id, 1);
+  assert.equal(app.requests.length, 1);
+  app.network.send = async () => response();
+  await app.state.checkout();
+  assert.deepEqual(app.requests[1], first);
+  assert.equal(app.state.checkoutAttempt, null);
+});
+
+test('a confirmed checkout validation failure allows correction without retaining an old request', async () => {
+  const app = harness();
+  app.state.cart = [sku()];
+  app.network.send = async () => response(400, {detail:'Insufficient stock'});
+  await app.state.checkout();
+  assert.equal(app.state.checkoutAttempt, null);
+  assert.equal(app.state.checkoutRequestId, '');
+  app.state.selectPayment('alipay');
+  app.state.setSaleNote({target:{value:'corrected'}});
+  app.network.send = async () => response();
+  await app.state.checkout();
+  assert.notEqual(app.requests[0].body.client_request_id, app.requests[1].body.client_request_id);
+  assert.equal(app.requests[1].body.payment_method, 'alipay');
 });

@@ -249,7 +249,7 @@ test('reference categories group standards without changing saved label claims',
 
 test('unknown legacy categories and custom standards stay available without invented defaults', async () => {
   const app = harness(), data = label();
-  data.product_category = '上衣';
+  data.product_category = '历史自定义品类';
   data.configuration.execution_standard = 'Q/EXAMPLE 001-2026';
   data.configuration.safety_category = null;
   data.configuration.label_verified = false;
@@ -286,6 +286,36 @@ test('product entry loads category choices from the shared backend catalog', asy
   assert.equal(app.state.productCategories[0].name, '半袖');
   assert.equal(app.state.np.category, '');
   assert.equal(app.state.productCatalogLoading, false);
+});
+
+test('all six new categories appear in product entry and barcode editing without changing saved claims', async () => {
+  const app = harness(), data = label();
+  const names = ['T恤衫', '小衫', '裤子', '上衣', '半裙', '马甲'];
+  data.standards.categories.push(...names.map(name => ({name, note: '按实际面料和厂家资料核对'})));
+  data.standards.execution_standards[0].categories.push('T恤衫', '上衣');
+  data.standards.execution_standards.push(
+    {code: 'FZ/T 81007-2022', categories: ['小衫', '裤子', '上衣', '半裙', '马甲']},
+    {code: 'FZ/T 73020-2019', categories: ['小衫', '裤子', '上衣', '马甲']},
+    {code: 'FZ/T 73026-2014', categories: ['半裙']},
+  );
+  app.network.send = async url => response(200, url.endsWith('label-catalog') ? data.standards : data);
+  await app.state.loadLabelCatalog();
+  for (const [index, category] of names.entries()) {
+    assert.ok(app.state.productCategories.some(item => item.name === category));
+    data.product_category = category;
+    await app.state.showBarcode({id: 1, barcode: data.barcode});
+    assert.ok(app.state.labelCategories.some(item => item.name === category));
+    assert.equal(app.state.labelCategoryFilter, category);
+    assert.ok(app.state.relatedLabelStandards.length > 0);
+    app.state.labelCategoryFilter = names[(index + 1) % names.length];
+    assert.equal(app.state.labelForm.execution_standard, data.configuration.execution_standard);
+    assert.equal(app.state.labelForm.safety_category, 'B');
+    assert.equal(app.state.labelForm.label_verified, true);
+    assert.equal(app.state.labelDirty, false);
+    assert.equal(app.state.labelInfo.product_category, category);
+    assert.equal(app.state.labelInfo.barcode, data.barcode);
+  }
+  assert.equal(app.writes.length, 0);
 });
 
 test('changing users discards a late category catalog response', async () => {

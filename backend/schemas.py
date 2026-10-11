@@ -146,6 +146,8 @@ class SaleCreate(SQLModel):
     items: List[SaleItem] = Field(min_length=1, max_length=100)
     client_request_id: str = Field(min_length=16, max_length=80)
     store: Optional[str] = None        # 收银门店
+    payment_method: Literal["cash", "wechat", "alipay", "card"] = "cash"
+    note: Optional[str] = Field(default=None, max_length=500)
 
 
 # ---------- 退货 ----------

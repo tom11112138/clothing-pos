@@ -2,11 +2,13 @@ import hashlib
 import json
 import os
 import uuid
-from typing import Optional
+from datetime import UTC, date as Date, datetime, timedelta
+from typing import Literal, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import update
+from sqlalchemy import case, func, literal, union_all, update
 from sqlmodel import Session, select
 
 from database import DEFAULT_STORES, get_session
@@ -20,6 +22,28 @@ from time_utils import local_date_bounds_utc, utc_iso, utc_now
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 BUSINESS_TIMEZONE = os.getenv("BUSINESS_TIMEZONE", "Asia/Shanghai")
+PAYMENT_METHODS = {"cash": "现金", "wechat": "微信", "alipay": "支付宝", "card": "刷卡"}
+
+
+def _order_store(store: Optional[str], user: User) -> Optional[str]:
+    if user.role != "manager":
+        if user.store not in DEFAULT_STORES:
+            raise HTTPException(403, "店员账号未绑定有效门店")
+        if store and store != user.store:
+            raise HTTPException(403, "店员只能查看自己门店流水")
+        return user.store
+    if store and store not in DEFAULT_STORES:
+        raise HTTPException(400, "门店不正确")
+    return store or None
+
+
+def _date_bounds(value: str):
+    try:
+        if Date.fromisoformat(value).isoformat() != value:
+            raise ValueError
+        return local_date_bounds_utc(value, BUSINESS_TIMEZONE)
+    except (ValueError, OverflowError) as exc:
+        raise HTTPException(400, "日期格式应为 YYYY-MM-DD，且为有效日期") from exc
 
 
 def _yuan(cents: int) -> float:
@@ -38,29 +62,30 @@ def list_orders(
 ):
     """账单流水：销售单列表，支持按门店 / 单号 / 日期区间筛选。"""
     stmt = select(SalesOrder)
-    if user.role != "manager":
-        if not user.store:
-            raise HTTPException(403, "店员账号未绑定门店")
-        stmt = stmt.where(SalesOrder.store == user.store)
-    elif store:
-        if store not in DEFAULT_STORES:
-            raise HTTPException(400, "门店不正确")
+    store = _order_store(store, user)
+    if store:
         stmt = stmt.where(SalesOrder.store == store)
     if keyword:
         stmt = stmt.where(SalesOrder.order_no.contains(keyword))
     if date_from:
-        start, _ = local_date_bounds_utc(date_from, BUSINESS_TIMEZONE)
+        start, _ = _date_bounds(date_from)
         stmt = stmt.where(SalesOrder.created_at >= start)
     if date_to:
-        _, end = local_date_bounds_utc(date_to, BUSINESS_TIMEZONE)
+        _, end = _date_bounds(date_to)
         stmt = stmt.where(SalesOrder.created_at <= end)
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(400, "开始日期不能晚于结束日期")
 
+    matched = stmt.subquery()
+    count, total, item_count = session.execute(select(
+        func.count(), func.coalesce(func.sum(matched.c.total_cents), 0),
+        func.coalesce(func.sum(matched.c.item_count), 0),
+    ).select_from(matched)).one()
     orders = session.exec(stmt.order_by(SalesOrder.id.desc()).limit(limit)).all()
     return {
+        "returned_count": len(orders), "has_more": count > len(orders),
         "summary": {
-            "count": len(orders),
-            "total": _yuan(sum(o.total_cents for o in orders)),
-            "item_count": sum(o.item_count for o in orders),
+            "count": count, "total": _yuan(total), "item_count": item_count,
         },
         "orders": [
             {
@@ -71,10 +96,101 @@ def list_orders(
                 "item_count": o.item_count,
                 "total": _yuan(o.total_cents),
                 "status": o.status,
+                "payment_method": o.payment_method,
+                "note": o.note,
                 "created_at": utc_iso(o.created_at),
             }
             for o in orders
         ],
+    }
+
+
+def _turnover_period(period: str, value: Optional[str]):
+    today = datetime.now(ZoneInfo(BUSINESS_TIMEZONE)).date()
+    value = value or (today.isoformat() if period == "day" else today.strftime("%Y-%m"))
+    try:
+        if period == "day":
+            first = Date.fromisoformat(value)
+            if first.isoformat() != value:
+                raise ValueError
+            end = first + timedelta(days=1)
+        elif period == "month":
+            first = Date.fromisoformat(value + "-01")
+            if first.isoformat()[:7] != value:
+                raise ValueError
+            end = Date(first.year + 1, 1, 1) if first.month == 12 else Date(first.year, first.month + 1, 1)
+        else:
+            raise ValueError
+    except (ValueError, OverflowError) as exc:
+        raise HTTPException(400, "请选择有效日期（日流水 YYYY-MM-DD，月流水 YYYY-MM）") from exc
+    days = [first + timedelta(days=i) for i in range((end - first).days)]
+    try:
+        boundaries = [local_date_bounds_utc(day.isoformat(), BUSINESS_TIMEZONE)[0] for day in days + [end]]
+    except (ValueError, OverflowError) as exc:
+        raise HTTPException(400, "日期超出可用范围") from exc
+    return value, days, boundaries
+
+
+def _empty_turnover(**identity):
+    return {**identity, "sales_cents": 0, "refund_cents": 0, "net_cents": 0,
+            "order_count": 0, "refund_count": 0, "item_count": 0}
+
+
+@router.get("/turnover")
+def get_turnover(
+    period: Literal["day", "month"] = "day",
+    date: Optional[str] = None,
+    store: Optional[str] = None,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Cash-flow periods use event time and actual sale/refund store, never list limits."""
+    store = _order_store(store, user)
+    value, days, boundaries = _turnover_period(period, date)
+    visible_stores = [store] if store else list(DEFAULT_STORES)
+    method = case((SalesOrder.payment_method.in_(list(PAYMENT_METHODS)), SalesOrder.payment_method),
+                  else_="unrecorded")
+    sales = select(
+        SalesOrder.store.label("store"), SalesOrder.created_at.label("created_at"),
+        method.label("payment_method"), SalesOrder.total_cents.label("sales_cents"),
+        literal(0).label("refund_cents"), literal(1).label("order_count"),
+        literal(0).label("refund_count"), SalesOrder.item_count.label("item_count"),
+    ).where(SalesOrder.store.in_(visible_stores),
+            SalesOrder.created_at >= boundaries[0], SalesOrder.created_at < boundaries[-1])
+    refunds = select(
+        SalesRefund.store, SalesRefund.created_at, method,
+        literal(0), SalesRefund.total_cents, literal(0), literal(1), literal(0),
+    ).join(SalesOrder, SalesOrder.id == SalesRefund.order_id).where(
+        SalesRefund.store.in_(visible_stores),
+        SalesRefund.created_at >= boundaries[0], SalesRefund.created_at < boundaries[-1],
+    )
+    events = union_all(sales, refunds).subquery()
+    # UTC range comparisons work on both databases, including DST business days.
+    business_date = case(*[
+        (events.c.created_at < boundaries[i + 1], day.isoformat())
+        for i, day in enumerate(days)
+    ], else_=days[-1].isoformat())
+    keys = ("sales_cents", "refund_cents", "order_count", "refund_count", "item_count")
+    rows = session.execute(select(
+        events.c.store, events.c.payment_method, business_date.label("date"),
+        *[func.sum(events.c[key]).label(key) for key in keys],
+    ).group_by(events.c.store, events.c.payment_method, business_date)).mappings().all()
+    summary = _empty_turnover()
+    stores = {name: _empty_turnover(store=name) for name in visible_stores}
+    methods = {code: _empty_turnover(payment_method=code, name=name)
+               for code, name in {**PAYMENT_METHODS, "unrecorded": "未记录（历史订单）"}.items()}
+    daily = {day.isoformat(): _empty_turnover(date=day.isoformat()) for day in days}
+    for row in rows:
+        for target in (summary, stores[row["store"]], methods[row["payment_method"]], daily[row["date"]]):
+            for key in keys:
+                target[key] += int(row[key] or 0)
+            target["net_cents"] = target["sales_cents"] - target["refund_cents"]
+    return {
+        "period": period, "date": value, "store": store, "timezone": BUSINESS_TIMEZONE,
+        "date_from": days[0].isoformat(), "date_to": days[-1].isoformat(),
+        "generated_at": utc_iso(datetime.now(UTC)),
+        "summary": summary, "stores": list(stores.values()),
+        "payments": list(methods.values()), "days": list(daily.values()),
     }
 
 
@@ -85,7 +201,8 @@ def get_order(order_id: int, user: User = Depends(get_current_user),
     order = session.get(SalesOrder, order_id)
     if not order:
         raise HTTPException(404, "订单不存在")
-    if user.role != "manager" and order.store != user.store:
+    allowed_store = _order_store(None, user)
+    if allowed_store and order.store != allowed_store:
         raise HTTPException(403, "店员只能查看自己门店订单")
     items = session.exec(
         select(SalesOrderItem).where(SalesOrderItem.order_id == order_id)
@@ -99,6 +216,8 @@ def get_order(order_id: int, user: User = Depends(get_current_user),
         "total": _yuan(order.total_cents),
         "refunded": _yuan(order.refunded_cents),
         "status": order.status,
+        "payment_method": order.payment_method,
+        "note": order.note,
         "created_at": utc_iso(order.created_at),
         "items": [
             {
