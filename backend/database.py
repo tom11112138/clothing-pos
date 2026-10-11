@@ -103,6 +103,8 @@ def _ensure_runtime_schema() -> None:
             ))
             conn.execute(text("alter table sku add column if not exists active boolean not null default true"))
             conn.execute(text("alter table sku add column if not exists version integer not null default 0"))
+            conn.execute(text("alter table sku add column if not exists archived_at timestamp without time zone"))
+            conn.execute(text("create index if not exists ix_sku_archived_at on sku(archived_at)"))
             conn.execute(text("create index if not exists ix_sku_active on sku(active)"))
             conn.execute(text("alter table auth_token add column if not exists csrf_hash varchar"))
             conn.execute(text(
@@ -215,6 +217,9 @@ def _ensure_runtime_schema() -> None:
                 conn.execute(text("alter table sku add column active boolean not null default 1"))
             if "version" not in sku_names:
                 conn.execute(text("alter table sku add column version integer not null default 0"))
+            if "archived_at" not in sku_names:
+                conn.execute(text("alter table sku add column archived_at datetime"))
+            conn.execute(text("create index if not exists ix_sku_archived_at on sku(archived_at)"))
             conn.execute(text("create index if not exists ix_sku_active on sku(active)"))
             if "csrf_hash" not in auth_names:
                 conn.execute(text("alter table auth_token add column csrf_hash varchar"))
@@ -291,7 +296,7 @@ def _ensure_store_inventory_rows() -> None:
         dialect = conn.dialect.name
         if dialect == "postgresql":
             for store in DEFAULT_STORES:
-                qty_expr = "sku.quantity" if store == DEFAULT_STORES[0] else "0"
+                qty_expr = "case when sku.archived_at is null then sku.quantity else 0 end" if store == DEFAULT_STORES[0] else "0"
                 conn.execute(
                     text(
                         "insert into inventory (sku_id, store, quantity, safety_stock, updated_at) "
@@ -306,7 +311,7 @@ def _ensure_store_inventory_rows() -> None:
                 )
         elif dialect == "sqlite":
             for store in DEFAULT_STORES:
-                qty_expr = "sku.quantity" if store == DEFAULT_STORES[0] else "0"
+                qty_expr = "case when sku.archived_at is null then sku.quantity else 0 end" if store == DEFAULT_STORES[0] else "0"
                 conn.execute(
                     text(
                         "insert into inventory (sku_id, store, quantity, safety_stock, updated_at) "

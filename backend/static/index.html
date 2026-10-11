@@ -213,11 +213,35 @@
     .variant-money { width: 100px; }
     .workflow-summary { margin: 16px 0; padding: 12px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); line-height: 1.8; overflow-wrap: anywhere; }
     .workflow-modal .modal-btns { flex-wrap: wrap; }
+    .archive-section { padding: 20px; background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .archive-section .row { margin-bottom: 18px; }
+    .archive-section .field { flex: 1; min-width: 0; }
+    .archive-section input { width: 100%; }
+    .archive-section h2 { font-size: 16px; margin: 0; }
+    .archive-section .hint { color: var(--text-faint); font-size: 12px; }
+    .archive-table th { letter-spacing: 0; }
+    .archive-pagination { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 18px; }
+    .archive-pagination button { width: 36px; height: 36px; padding: 0; font-size: 20px; }
+    .lifecycle-stocks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
+    .lifecycle-stocks div { padding: 10px 0; border-bottom: 1px solid var(--border); text-align: center; }
+    .lifecycle-stocks span { display: block; color: var(--text-soft); font-size: 12px; margin-bottom: 6px; }
+    .lifecycle-reasons { padding-left: 20px; line-height: 1.8; overflow-wrap: anywhere; }
+    .lifecycle-modal .modal-btns .btn { flex: 1 1 110px; min-width: 0; white-space: normal; }
     .bulk-pricing-table { table-layout: fixed; }
     .bulk-pricing-table th:first-child { width: 36px; }
     .bulk-pricing-table th, .bulk-pricing-table td { white-space: normal; overflow-wrap: anywhere; letter-spacing: 0; }
     .bulk-pricing-table .price-before { color: var(--text-soft); display: block; margin-bottom: 4px; }
     @media (max-width: 600px) {
+      .archive-table, .archive-table tbody { display: block; width: 100%; }
+      .archive-table thead { display: none; }
+      .archive-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 12px 0; border-bottom: 1px solid var(--border); }
+      .archive-table td { display: block; min-width: 0; border: 0; padding: 3px 0; overflow-wrap: anywhere; }
+      .archive-table .archive-product { grid-column: 1; grid-row: 1; }
+      .archive-table .archive-spec { grid-column: 1; grid-row: 2; }
+      .archive-table .archive-code { grid-column: 1; grid-row: 3; }
+      .archive-table .archive-time { grid-column: 1 / -1; grid-row: 4; color: var(--text-soft); font-size: 12px; }
+      .archive-table .archive-time::before { content: '归档于 '; }
+      .archive-table .archive-action { grid-column: 2; grid-row: 1 / 4; padding-left: 10px; }
       .workflow-fields .field { width: 100%; min-width: 0 !important; }
       .workflow-fields .field input, .workflow-fields .field select { width: 100% !important; }
       .modal.workflow-modal { padding: 20px 16px; }
@@ -398,6 +422,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5"/></svg>
           商品录入
         </button>
+        <button v-if="isManager" :class="{active: tab==='archive'}" @click="goArchive">归档商品</button>
         <button :class="{active: tab==='pos'}" @click="goPos">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/></svg>
           收银
@@ -521,6 +546,7 @@
                         <button v-if="isManager" class="btn sm ghost" @click="addTransferItem(s)">加入调拨</button>
                         <button class="btn sm ghost" @click="showBarcode(s)">条码</button>
                         <button v-if="isManager" class="btn sm ghost" @click="toggleSkuActive(s)">{{ s.active ? '下架' : '启用' }}</button>
+                        <button v-if="isManager" class="btn sm ghost" @click="openSkuLifecycle(s, 'archive')" :disabled="hasManagementPending || checkingOut || !!checkoutAttempt">归档</button>
                         <button v-if="isManager" class="btn sm danger-ghost" @click="delSku(s)">删</button>
                       </div>
                     </td>
@@ -587,6 +613,20 @@
         </template>
 
         <!-- ============ 商品录入 ============ -->
+        <template v-if="tab==='archive' && isManager">
+          <section class="archive-section">
+            <div class="row"><div class="field"><label for="archive-keyword">款名 / 款号 / 条码</label><input id="archive-keyword" v-model="archiveKeyword" @keyup.enter="loadArchived(true)" /></div><button class="btn" @click="loadArchived(true)" :disabled="archiveLoading">查询</button></div>
+            <div class="card-head"><h2>归档商品</h2><span class="hint">共 {{ archiveTotal }} 个 SKU</span></div>
+            <div v-if="archiveLoading" class="report-message" role="status">正在加载...</div>
+            <div v-else-if="archiveError" class="login-err" role="alert">{{ archiveError }}</div>
+            <div v-else-if="archivedSkus.length" class="table-wrap"><table class="archive-table"><thead><tr><th>款式</th><th>颜色 / 尺码</th><th>条码</th><th>归档时间</th><th style="text-align:right">操作</th></tr></thead><tbody>
+              <tr v-for="s in archivedSkus" :key="s.id"><td class="archive-product"><div class="strong">{{ s.product_name }}</div><div class="code-cell">{{ s.product_code }}</div></td><td class="archive-spec">{{ s.color || '-' }} / {{ s.size || '-' }}</td><td class="code-cell archive-code">{{ s.barcode }}</td><td class="archive-time">{{ fmtTime(s.archived_at) }}</td><td class="archive-action" style="text-align:right"><button class="btn sm ghost" @click="openSkuLifecycle(s, 'restore')" :disabled="hasManagementPending || checkingOut || !!checkoutAttempt">恢复</button></td></tr>
+            </tbody></table></div>
+            <div v-else class="empty">{{ archiveSearch ? '没有匹配的归档商品' : '暂无归档商品' }}</div>
+            <div class="archive-pagination"><span class="hint">第 {{ Math.floor(archiveOffset / archiveLimit) + 1 }} / {{ Math.max(1, Math.ceil(archiveTotal / archiveLimit)) }} 页</span><button class="btn ghost" title="上一页" aria-label="上一页" @click="changeArchivePage(-1)" :disabled="archiveLoading || archiveOffset===0">&#8592;</button><button class="btn ghost" title="下一页" aria-label="下一页" @click="changeArchivePage(1)" :disabled="archiveLoading || archiveOffset+archiveLimit>=archiveTotal">&#8594;</button></div>
+          </section>
+        </template>
+
         <template v-if="tab==='product'">
           <div class="card">
             <div class="card-head"><h2>新款录入</h2></div>
@@ -866,6 +906,22 @@
     </div>
   </div>
 
+  <div class="modal-mask" v-if="me && isManager && lifecycle.sku" @click.self="closeSkuLifecycle" @keydown.esc="closeSkuLifecycle">
+    <section class="modal workflow-modal lifecycle-modal" role="dialog" aria-modal="true" aria-labelledby="lifecycle-title">
+      <div class="modal-title" id="lifecycle-title">{{ lifecycleTitle }}</div>
+      <h3>{{ lifecycle.sku.product_name }} · {{ lifecycle.sku.color || '-' }} / {{ lifecycle.sku.size || '-' }}</h3>
+      <div class="code-cell">{{ lifecycle.sku.barcode }}</div>
+      <div v-if="lifecycle.loading" class="report-message" role="status">正在核对四店库存和单据...</div>
+      <template v-if="lifecycle.status">
+        <div class="lifecycle-stocks"><div v-for="inv in lifecycle.status.inventories" :key="inv.store"><span>{{ inv.store }}</span><strong>{{ inv.quantity }} 件</strong></div></div>
+        <div class="workflow-summary">{{ lifecycle.action === 'delete' ? '永久删除无法恢复，仅限无库存、无业务记录的误建 SKU。' : lifecycle.action === 'restore' ? '恢复后保持停用，原条码不变，库存不变。' : '归档后从日常库存列表隐藏，条码及历史账目保留。' }}</div>
+        <ul v-if="lifecycleReasons.length" class="lifecycle-reasons"><li v-for="reason in lifecycleReasons" :key="reason">{{ reason }}</li></ul>
+      </template>
+      <div v-if="lifecycle.error" class="login-err" role="alert">{{ lifecycle.error }}</div>
+      <div class="modal-btns"><button class="btn ghost" @click="closeSkuLifecycle" :disabled="lifecycle.saving || !!lifecycle.attempt">取消</button><button v-if="lifecycle.reloadRequired || lifecycleReasons.length || (!lifecycle.loading && !lifecycle.status)" class="btn ghost" @click="reloadSkuLifecycle" :disabled="lifecycle.loading || lifecycle.saving || !!lifecycle.attempt">重新核对</button><button v-if="lifecycle.action==='delete' && lifecycle.status?.can_archive && !lifecycle.attempt" class="btn ghost" @click="lifecycle.action='archive'" :disabled="lifecycle.saving">改为归档</button><button class="btn" :class="{danger:lifecycle.action==='delete'}" @click="saveSkuLifecycle" :disabled="lifecycle.saving || lifecycle.loading || lifecycle.reloadRequired || (!lifecycle.attempt && !lifecycleAllowed)">{{ lifecycle.saving ? '处理中...' : lifecycle.attempt ? '重试确认' : lifecycleTitle }}</button></div>
+    </section>
+  </div>
+
   <!-- 入库/出库/调拨 确认弹窗 -->
   <div class="modal-mask" v-if="me && isManager && bulkPrice.product" @click.self="closeBulkPricing" @keydown.esc="closeBulkPricing">
     <section class="modal workflow-modal" role="dialog" aria-modal="true" aria-labelledby="bulk-price-title">
@@ -1107,7 +1163,7 @@
     </div>
   </div>
 
-  <div class="toast" v-if="toast && !bulkPrice.product && !correction.open && !intake.review">{{ toast }}</div>
+  <div class="toast" v-if="toast && !bulkPrice.product && !correction.open && !intake.review && !lifecycle.sku">{{ toast }}</div>
 </div>
 
 <script>
@@ -1129,6 +1185,7 @@ const quantityValue = value => {
 const operationState = () => ({loading:false, saving:false, error:'', reloadRequired:false, attempt:null});
 const bulkPriceState = () => ({...operationState(), product:null, rows:[], changePrice:false, changeCost:false, price:'', cost:''});
 const correctionState = store => ({...operationState(), open:false, store, barcode:'', sku:null, actual:'', note:'', readVersion:0});
+const lifecycleState = () => ({...operationState(), sku:null, action:'archive', status:null, target:null});
 const intakeState = store => ({...operationState(), store, colors:'', sizes:'', price:'0', cost:'0', quantity:'0', safety_stock:'0', variants:[], lastDefaults:null, review:null,
   label:{composition:'', execution_standard:'', label_usage:'', safety_category:'', label_verified:false}});
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, ch => ({
@@ -1178,6 +1235,7 @@ createApp({
       skuPriceSku: null, skuPriceForm: {price:'', cost:''}, skuPriceVersion: null,
       skuPriceLoading: false, skuPriceSaving: false, skuPriceError: '', skuPriceReloadRequired: false, skuPriceViewVersion: 0,
       bulkPrice: bulkPriceState(), correction: correctionState(STORES[0]), intake: intakeState(localStorage.getItem('pos_store') || STORES[0]), intakeCatalog: {},
+      lifecycle: lifecycleState(), archivedSkus: [], archiveKeyword:'', archiveSearch:'', archiveTotal:0, archiveOffset:0, archiveLimit:30, archiveLoading:false, archiveError:'', archiveViewVersion:0,
       batchReceiveRequest: null, batchReceiveOwnerId: null, batchReceiveError: '',
       countSubmitting: false, countLoading: false, countError: '', countReloadRequired: false, countViewVersion: 0,
       // 商品
@@ -1208,6 +1266,7 @@ createApp({
         this.closeBarcode();
         this.resetSkuPricing();
         this.bulkPrice = bulkPriceState(); this.correction = correctionState(this.currentStore); this.intake = intakeState(this.currentStore); this.intakeCatalog = {};
+        this.lifecycle = lifecycleState(); this.resetArchivedView();
         this.np = {code:'', name:'', category:'', brand:'', tag_price:0}; this.products = [];
         this.stockViewVersion += 1; this.skus = [];
         this.closeStoreMenu();
@@ -1240,7 +1299,10 @@ createApp({
     intakeStandards() { return (this.intakeCatalog.execution_standards || []).filter(s => !this.np.category || s.categories?.includes(this.np.category)); },
     intakeUsage() { return (this.intakeCatalog.usages || []).find(u => u.value === this.intake.label.label_usage); },
     intakeSafety() { return (this.intakeCatalog.safety_categories || []).find(s => s.value === this.intake.label.safety_category); },
-    hasManagementPending() { return [this.bulkPrice, this.correction, this.intake].some(s => s.saving || s.attempt); },
+    hasManagementPending() { return [this.bulkPrice, this.correction, this.intake, this.lifecycle].some(s => s.saving || s.attempt); },
+    lifecycleTitle() { return {archive:'确认归档', restore:'恢复为停用', delete:'永久删除'}[this.lifecycle.action]; },
+    lifecycleAllowed() { return !!this.lifecycle.status?.['can_'+this.lifecycle.action]; },
+    lifecycleReasons() { return this.lifecycle.status?.[this.lifecycle.action+'_reasons'] || []; },
     labelDirty() {
       if (!this.labelForm || !this.labelInfo) return false;
       return Object.keys(this.labelForm).some(key => (this.labelForm[key] ?? '') !== (this.labelInfo.configuration?.[key] ?? ''));
@@ -1273,7 +1335,7 @@ createApp({
       return '出库 −';
     },
     isManager() { return !!(this.me && this.me.role === 'manager'); },
-    pageTitle() { return { stock:'库存查询', product:'商品录入', pos:'收银', orders:'账单流水', users:'账号管理' }[this.tab]; },
+    pageTitle() { return { stock:'库存查询', archive:'归档商品', product:'商品录入', pos:'收银', orders:'账单流水', users:'账号管理' }[this.tab]; },
     pageSub() {
       return {
         stock: '按款名 / 款号 / 条码查询库存，支持低库存预警',
@@ -1399,6 +1461,38 @@ createApp({
     },
 
     goStock(){ this.tab='stock'; this.loadStock(); },
+    goArchive(){
+      if (!this.isManager || this.hasManagementPending) return;
+      this.tab = 'archive'; this.loadArchived(true);
+    },
+    resetArchivedView(){
+      this.archiveViewVersion += 1; this.archivedSkus = []; this.archiveKeyword = ''; this.archiveSearch = '';
+      this.archiveTotal = 0; this.archiveOffset = 0; this.archiveLoading = false; this.archiveError = '';
+    },
+    async loadArchived(reset=true){
+      if (!this.isManager) return;
+      if (reset) { this.archiveOffset = 0; this.archiveSearch = this.archiveKeyword.trim(); }
+      const owner = authVersion, view = ++this.archiveViewVersion;
+      this.archiveLoading = true; this.archiveError = '';
+      try {
+        const q = new URLSearchParams({keyword:this.archiveSearch, offset:String(this.archiveOffset), limit:String(this.archiveLimit)});
+        const result = await api('/api/skus/archived?'+q);
+        if (owner !== authVersion || view !== this.archiveViewVersion || !this.isManager) return;
+        this.archiveTotal = result.total;
+        if (this.archiveOffset > 0 && this.archiveOffset >= result.total) {
+          this.archiveOffset = Math.max(0, Math.ceil(result.total / this.archiveLimit)-1) * this.archiveLimit;
+          return this.loadArchived(false);
+        }
+        this.archivedSkus = result.items;
+      } catch(e){ if (owner === authVersion && view === this.archiveViewVersion) { this.archivedSkus = []; this.archiveError = e.message; } }
+      finally { if (owner === authVersion && view === this.archiveViewVersion) this.archiveLoading = false; }
+    },
+    changeArchivePage(direction){
+      if (!this.isManager || this.archiveLoading || this.hasManagementPending) return;
+      const next = this.archiveOffset + direction * this.archiveLimit;
+      if (next < 0 || next >= this.archiveTotal) return;
+      this.archiveOffset = next; this.loadArchived(false);
+    },
     goProduct(){ this.tab='product'; this.loadProducts(); },
     goPos(){ this.tab='pos'; this.$nextTick(()=> this.$refs.scan && this.$refs.scan.focus()); },
 
@@ -1414,7 +1508,7 @@ createApp({
         if (this.includeInactive && this.isManager) q.set('include_inactive', 'true');
         const rows = await api('/api/skus?'+q);
         if (owner !== authVersion || view !== this.stockViewVersion) return;
-        this.skus = rows.map(s=> ({...s, _qty: 1}));
+        this.skus = rows.filter(s=>!s.archived_at).map(s=> ({...s, _qty: 1}));
         if (this.isManager) {
           if (!this.countStore || !this.stores.includes(this.countStore)) this.countStore = this.currentStore;
           if (!this.transferTarget || this.transferTarget === this.stockStore) this.transferTarget = this.transferTargetsForDraft[0] || '';
@@ -1742,13 +1836,47 @@ createApp({
       try { await box.onOk(); } catch(e){ this.flash(e.message); }
       finally { this.confirmRunning = false; this.confirmBox = null; }
     },
-    delSku(s){
-      this.confirmBox = {
-        title: '删除该 SKU？',
-        desc: `${s.product_name} · ${s.color || '-'}/${s.size || '-'} · 条码 ${s.barcode}。删除后该规格及其库存流水将一并移除，不可恢复。`,
-        okText: '删除', danger: true,
-        onOk: async () => { await api('/api/skus/'+s.id, {method:'DELETE'}); this.flash('已删除'); this.loadStock(); },
-      };
+    delSku(s){ return this.openSkuLifecycle(s, 'delete'); },
+    async openSkuLifecycle(s, action){
+      if (!this.isManager || this.hasManagementPending || !['archive','restore','delete'].includes(action)) return;
+      if (this.checkingOut || this.checkoutAttempt || this.pendingScans) return this.flash('请先完成扫码并确认当前结算结果');
+      this.lifecycle = {...lifecycleState(), sku:{...s}, action};
+      await this.reloadSkuLifecycle();
+    },
+    async reloadSkuLifecycle(){
+      const state = this.lifecycle, owner = authVersion;
+      if (!this.isManager || !state.sku || state.loading || state.saving || state.attempt) return;
+      state.loading = true; state.status = null; state.error = ''; state.reloadRequired = true;
+      try {
+        const result = await api('/api/skus/'+state.sku.id+'/lifecycle');
+        if (owner !== authVersion || this.lifecycle !== state) return;
+        if (result.sku?.id !== state.sku.id || !Number.isSafeInteger(result.version) || !Array.isArray(result.inventories)) throw new Error('状态资料不完整，请更新服务后重试');
+        state.sku = result.sku; state.status = result; state.reloadRequired = false;
+      } catch(e){ if (owner === authVersion && this.lifecycle === state) state.error = e.message; }
+      finally { if (owner === authVersion && this.lifecycle === state) state.loading = false; }
+    },
+    closeSkuLifecycle(){ if (!this.lifecycle.saving && !this.lifecycle.attempt) this.lifecycle = lifecycleState(); },
+    async saveSkuLifecycle(){
+      const state = this.lifecycle;
+      if (!this.isManager || !state.sku || state.loading || state.saving || state.reloadRequired) return;
+      if (!state.attempt && !this.lifecycleAllowed) return;
+      if (!state.attempt) {
+        const base = '/api/skus/'+state.sku.id;
+        state.target = {url:state.action==='delete' ? base : base+'/'+state.action, method:state.action==='delete' ? 'DELETE' : 'POST', action:state.action};
+      }
+      const target = state.target;
+      await this.submitWorkflow('lifecycle', target.url, {expected_version:state.status.version}, result => {
+        this.stockViewVersion += 1; this.archiveViewVersion += 1;
+        this.skus = this.skus.filter(s=>s.id!==result.id);
+        this.archivedSkus = this.archivedSkus.filter(s=>s.id!==result.id);
+        this.transferDraft = this.transferDraft.filter(s=>s.sku_id!==result.id && s.id!==result.id);
+        this.cart = this.cart.filter(s=>s.sku_id!==result.id && s.id!==result.id);
+        if (target.action==='restore') this.includeInactive = true;
+        this.lifecycle = lifecycleState();
+        this.flash({archive:'已归档，历史账目已保留',restore:'已恢复为停用',delete:'已永久删除误建 SKU'}[target.action]);
+        this.loadStock(); if (this.tab==='archive') this.loadArchived(false);
+      }, target.method);
+      if (this.lifecycle === state && state.error && !state.attempt) state.reloadRequired = true;
     },
     toggleSkuActive(s){
       const next = !s.active;
@@ -1760,20 +1888,20 @@ createApp({
         okText: next ? '启用' : '下架',
         danger: !next,
         onOk: async () => {
-          await api('/api/skus/'+s.id, {method:'PUT', body: JSON.stringify({ active: next })});
+          await api('/api/skus/'+s.id, {method:'PUT', body: JSON.stringify({ active: next, expected_version:s.version })});
           this.flash(next ? '已启用' : '已下架');
           this.loadStock();
         },
       };
     },
-    async submitWorkflow(key, url, payload, onSuccess){
+    async submitWorkflow(key, url, payload, onSuccess, method='POST'){
       const state = this[key], owner = authVersion;
       if (!this.isManager || state.saving || state.loading || state.reloadRequired) return;
       // Keep the exact request through uncertain network failures, including lost responses after commit.
       if (!state.attempt) state.attempt = JSON.stringify({...payload, client_request_id:newRequestId(key)});
       state.saving = true; state.error = '';
       try {
-        const result = await api(url, {method:'POST', body:state.attempt});
+        const result = await api(url, {method, body:state.attempt});
         if (owner !== authVersion || this[key] !== state) return;
         state.attempt = null;
         onSuccess(result);
@@ -1909,6 +2037,7 @@ createApp({
         }
         if (owner !== authVersion || this.correction !== state || view !== state.readVersion) return;
         if (!sku) throw new Error('未找到该条码');
+        if (sku.archived_at) throw new Error('该 SKU 已归档，请先在归档商品中恢复');
         if (!sku.inventory_updated_at || !Number.isSafeInteger(sku.quantity)) throw new Error('库存快照缺失，请更新服务后重试');
         state.sku = sku; state.reloadRequired = false;
       } catch(e) { if (owner === authVersion && this.correction === state && view === state.readVersion) state.error = e.message; }
@@ -1943,6 +2072,7 @@ createApp({
       try {
         const data = await api('/api/skus/'+id+'?store='+encodeURIComponent(this.stockStore === 'all' ? this.currentStore : this.stockStore));
         if (owner !== authVersion || view !== this.skuPriceViewVersion) return;
+        if (data.archived_at) throw new Error('该 SKU 已归档，请先在归档商品中恢复');
         if (!Number.isSafeInteger(data.version) || data.version < 0) throw new Error('价格资料版本缺失，请更新服务后重试');
         this.skuPriceSku = data;
         this.skuPriceForm = {price:String(data.price), cost:String(data.cost)};

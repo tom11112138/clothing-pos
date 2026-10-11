@@ -4,20 +4,21 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
-from sqlalchemy import update
+from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from database import DEFAULT_STORES, get_session
-from models import Inventory, Product, SalesOrderItem, Sku, StockLog, User
-from schemas import SkuCreate, SkuBatchCreate, SkuUpdate, SkuBatchPricing
+from models import Inventory, Product, Sku, User
+from schemas import SkuCreate, SkuBatchCreate, SkuUpdate, SkuBatchPricing, SkuLifecycleChange
 from barcode_utils import generate_barcode_png, make_sku_barcode
 from label_utils import generate_label_png, label_data
 from label_standards import standards_catalog
 from security import get_current_user, require_manager
 from audit import add_audit_event
 from management_operations import begin_operation, finish_operation
-from time_utils import utc_iso
+from time_utils import utc_iso, utc_now
+from sku_lifecycle import lifecycle_status, lock_skus, set_archived
 
 router = APIRouter(prefix="/api", tags=["skus"])
 
@@ -132,7 +133,7 @@ def _inventory_for(session: Session, sku: Sku, store: str) -> Inventory:
     inv = Inventory(
         sku_id=sku.id,
         store=store,
-        quantity=sku.quantity if store == DEFAULT_STORES[0] else 0,
+        quantity=sku.quantity if store == DEFAULT_STORES[0] and sku.archived_at is None else 0,
         safety_stock=sku.safety_stock,
     )
     session.add(inv)
@@ -160,6 +161,7 @@ def _sku_view(sku: Sku, product: Product, *, quantity: int, safety_stock: int, s
         "store": store,
         "active": sku.active,
         "version": sku.version,
+        "archived_at": utc_iso(sku.archived_at),
         "inventory_updated_at": utc_iso(inventory_updated_at),
         "low_stock": quantity <= safety_stock,
     }
@@ -235,7 +237,7 @@ def list_skus(
     session: Session = Depends(get_session),
 ):
     """库存查询主接口：支持关键词（款名/款号/条码）、按款式、低库存筛选。"""
-    stmt = select(Sku, Product).join(Product, Sku.product_id == Product.id)
+    stmt = select(Sku, Product).join(Product, Sku.product_id == Product.id).where(Sku.archived_at.is_(None))
     if not include_inactive or user.role != "manager":
         stmt = stmt.where(Sku.active == True)  # noqa: E712
     if product_id:
@@ -270,6 +272,83 @@ def list_skus(
     return result
 
 
+@router.get("/skus/archived")
+def list_archived_skus(keyword: Optional[str] = None, offset: int = Query(0, ge=0),
+                       limit: int = Query(30, ge=1, le=100),
+                       manager: User = Depends(require_manager), session: Session = Depends(get_session)):
+    filters = [Sku.archived_at.is_not(None)]
+    if keyword:
+        filters.append(Product.name.contains(keyword) | Product.code.contains(keyword) | Sku.barcode.contains(keyword))
+    total = session.exec(select(func.count()).select_from(Sku).join(Product).where(*filters)).one()
+    rows = session.exec(select(Sku, Product).join(Product).where(*filters)
+                        .order_by(Sku.archived_at.desc(), Sku.id.desc()).offset(offset).limit(limit)).all()
+    return {"total": total, "offset": offset, "limit": limit, "items": [
+        _sku_view(sku, product, quantity=0, safety_stock=0, store="all") for sku, product in rows
+    ]}
+
+
+@router.get("/skus/{sku_id}/lifecycle")
+def get_sku_lifecycle(sku_id: int, manager: User = Depends(require_manager), session: Session = Depends(get_session)):
+    sku = session.get(Sku, sku_id)
+    if not sku:
+        raise HTTPException(404, "SKU 不存在")
+    product = session.get(Product, sku.product_id)
+    return {"sku": _sku_view(sku, product, quantity=0, safety_stock=0, store="all"),
+            **lifecycle_status(session, sku)}
+
+
+def _change_lifecycle(sku_id, data, manager, session, action):
+    try:
+        operation = None
+        if data is not None:
+            operation, replay = begin_operation(session, data.client_request_id, "sku." + action, manager,
+                                                {"sku_id": sku_id, **data.model_dump(exclude={"client_request_id"})})
+            if replay is not None:
+                return replay
+        sku = lock_skus(session, [sku_id], allow_archived=True)[0]
+        if data is not None and data.expected_version != sku.version:
+            raise HTTPException(409, "SKU 状态已发生变化，请重新加载核对")
+        status = lifecycle_status(session, sku, lock_inventory=True)
+        if action in {"archive", "delete"} and not status["can_" + action]:
+            raise HTTPException(400, "；".join(status[action + "_reasons"]))
+        if action == "restore" and not status["can_restore"]:
+            raise HTTPException(409, "该 SKU 未归档，无需恢复，请重新加载")
+        if action == "delete":
+            for inv in session.exec(select(Inventory).where(Inventory.sku_id == sku_id)).all():
+                session.delete(inv)
+            add_audit_event(session, action="sku.delete", entity_type="sku", entity_id=sku_id, actor=manager,
+                            request_id=data.client_request_id if data else None,
+                            before={"barcode": sku.barcode, "product_id": sku.product_id, "color": sku.color, "size": sku.size})
+            session.delete(sku)
+            result = {"ok": True, "id": sku_id, "deleted": True}
+        else:
+            set_archived(session, sku, utc_now() if action == "archive" else None, manager,
+                         request_id=data.client_request_id, note=data.note)
+            result = {"ok": True, "id": sku_id, "active": False, "archived_at": utc_iso(sku.archived_at), "version": sku.version}
+        if operation is not None:
+            finish_operation(session, operation, result)
+        session.commit()
+        return result
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(409, "SKU 已有新的库存或单据引用，本次操作未完成，请重新加载核对")
+    except Exception:
+        session.rollback()
+        raise
+
+
+@router.post("/skus/{sku_id}/archive")
+def archive_sku(sku_id: int, data: SkuLifecycleChange, manager: User = Depends(require_manager),
+                session: Session = Depends(get_session)):
+    return _change_lifecycle(sku_id, data, manager, session, "archive")
+
+
+@router.post("/skus/{sku_id}/restore")
+def restore_sku(sku_id: int, data: SkuLifecycleChange, manager: User = Depends(require_manager),
+                session: Session = Depends(get_session)):
+    return _change_lifecycle(sku_id, data, manager, session, "restore")
+
+
 @router.get("/skus/by-barcode/{barcode}")
 def get_by_barcode(
     barcode: str,
@@ -281,6 +360,8 @@ def get_by_barcode(
     sku = session.exec(select(Sku).where(Sku.barcode == barcode)).first()
     if not sku:
         raise HTTPException(404, f"未找到条码 {barcode} 对应的商品")
+    if sku.archived_at is not None:
+        raise HTTPException(400, f"条码 {barcode} 对应的 SKU 已归档，不能销售")
     if not sku.active:
         raise HTTPException(400, f"条码 {barcode} 对应的 SKU 已停用，不能销售")
     product = session.get(Product, sku.product_id)
@@ -291,6 +372,8 @@ def get_by_barcode(
 
 
 def _apply_sku_values(session, sku, values, manager, request_id=None):
+    if sku.archived_at is not None:
+        raise HTTPException(409, "该 SKU 已归档，请先恢复后再修改")
     before = {key: getattr(sku, key) for key in ("color", "size", "price", "cost", "safety_stock", "active")}
     if all(getattr(sku, key) == value for key, value in values.items()):
         return False
@@ -432,27 +515,5 @@ def update_sku(
 
 @router.delete("/skus/{sku_id}")
 def delete_sku(sku_id: int, manager: User = Depends(require_manager),
-               session: Session = Depends(get_session)):
-    sku = session.get(Sku, sku_id)
-    if not sku:
-        raise HTTPException(404, "SKU 不存在")
-    has_logs = session.exec(select(StockLog.id).where(StockLog.sku_id == sku_id)).first()
-    has_sales = session.exec(select(SalesOrderItem.id).where(SalesOrderItem.sku_id == sku_id)).first()
-    inventory_rows = session.exec(select(Inventory).where(Inventory.sku_id == sku_id)).all()
-    total_quantity = sum(inv.quantity for inv in inventory_rows)
-    if total_quantity != 0 or has_logs or has_sales:
-        raise HTTPException(
-            400,
-            "该 SKU 已有库存或销售历史，不能直接删除；请保留历史账目，必要时将款式标记为停用/下架。",
-        )
-    for inv in inventory_rows:
-        session.delete(inv)
-    add_audit_event(
-        session, action="sku.delete", entity_type="sku", entity_id=sku.id,
-        actor=manager,
-        before={"barcode": sku.barcode, "product_id": sku.product_id,
-                "color": sku.color, "size": sku.size},
-    )
-    session.delete(sku)
-    session.commit()
-    return {"ok": True}
+               session: Session = Depends(get_session), data: Optional[SkuLifecycleChange] = None):
+    return _change_lifecycle(sku_id, data, manager, session, "delete")

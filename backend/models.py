@@ -49,6 +49,7 @@ class Sku(SQLModel, table=True):
     safety_stock: int = 0                               # 安全库存，低于此值预警
     active: bool = True                                 # 是否启用；下架/停用后不再出现在默认销售列表
     version: int = 0
+    archived_at: Optional[datetime] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utc_now)
 
 

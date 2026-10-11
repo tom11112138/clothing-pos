@@ -80,6 +80,12 @@ class SkuUpdate(SQLModel):
         return validate_money(value)
 
 
+class SkuLifecycleChange(SQLModel):
+    client_request_id: str = Field(min_length=16, max_length=80)
+    expected_version: int = Field(ge=0)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
 class PricingSelection(SQLModel):
     sku_id: int = Field(gt=0)
     expected_version: int = Field(ge=0)

@@ -19,6 +19,7 @@ from schemas import RefundCreate
 from security import get_current_user, require_manager
 from models import User
 from time_utils import local_date_bounds_utc, utc_iso, utc_now
+from sku_lifecycle import lock_skus, set_archived
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 BUSINESS_TIMEZONE = os.getenv("BUSINESS_TIMEZONE", "Asia/Shanghai")
@@ -302,6 +303,15 @@ def refund_order(order_id: int, data: RefundCreate,
     by_sku = {item.sku_id: item for item in items if item.sku_id is not None}
     by_barcode = {item.barcode: item for item in items}
 
+    resolved_items = []
+    for key_type, key_value in requested:
+        item = by_sku.get(key_value) if key_type == "sku" else by_barcode.get(key_value)
+        if item is None:
+            raise HTTPException(400, f"该订单不含商品：{key_value}")
+        resolved_items.append(item)
+    locked_skus = lock_skus(session, [item.sku_id for item in resolved_items if item.sku_id is not None],
+                            allow_archived=True)
+
     refund = SalesRefund(
         refund_no=f"RF{utc_now():%Y%m%d%H%M%S}{uuid.uuid4().hex[:6].upper()}",
         client_request_id=data.client_request_id,
@@ -316,6 +326,10 @@ def refund_order(order_id: int, data: RefundCreate,
     session.flush()
 
     refund_cents = 0
+    for sku in locked_skus:
+        if sku.archived_at is not None:
+            set_archived(session, sku, None, manager, request_id=data.client_request_id,
+                         note=f"历史订单 {order.order_no} 退货入库，自动恢复为停用")
     for (key_type, key_value), qty in requested.items():
         order_item = by_sku.get(key_value) if key_type == "sku" else by_barcode.get(key_value)
         if order_item is None:

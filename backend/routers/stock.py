@@ -20,6 +20,7 @@ from security import get_current_user, require_manager
 from audit import add_audit_event
 from time_utils import utc_iso, utc_now
 from management_operations import begin_operation, finish_operation
+from sku_lifecycle import lock_skus
 
 router = APIRouter(prefix="/api", tags=["stock"])
 
@@ -70,6 +71,7 @@ def _adjust_stock(session: Session, sku_id: int, store: str, delta: int) -> int:
     这样多门店/多收银台并发结算同一件商品也不会超卖，
     不再依赖「先查后改」那种有竞态的两步操作。
     """
+    lock_skus(session, [sku_id])
     _ensure_inventory(session, sku_id, store)
     conds = [Inventory.sku_id == sku_id, Inventory.store == store]
     if delta < 0:
@@ -168,6 +170,7 @@ def correct_inventory(data: InventoryCorrection, manager: User = Depends(require
         operation, replay = begin_operation(session, data.client_request_id, "stock.correction", manager, payload)
         if replay is not None:
             return replay
+        lock_skus(session, [data.sku_id])
         inventory = session.exec(select(Inventory).where(
             Inventory.sku_id == data.sku_id, Inventory.store == store
         ).with_for_update().execution_options(populate_existing=True)).first()
@@ -572,8 +575,9 @@ def create_transfer_batch(
     existing = _find_batch_retry(session, data, manager, from_store, to_store, merged)
     if existing:
         return {"ok": True, "duplicate": True, "transfer": _batch_view(session, existing)}
+    lock_skus(session, merged)
     sku_rows: dict[int, Sku] = {}
-    for sku_id, qty in merged.items():
+    for sku_id, qty in sorted(merged.items()):
         sku = session.get(Sku, sku_id)
         if not sku:
             raise HTTPException(404, f"SKU 不存在：{sku_id}")
@@ -705,6 +709,7 @@ def receive_transfer_batch(
         # Reserve the request ID before writing stock; all changes share one transaction.
         session.add(record)
         session.flush()
+        lock_skus(session, [item_by_id[row.item_id].sku_id for row in data.items])
         for receipt in data.items:
             item = item_by_id[receipt.item_id]
             if receipt.received_qty:
@@ -778,6 +783,7 @@ def cancel_transfer_batch(
     if batch.status != "shipped":
         raise HTTPException(409, "只能取消尚未收货的调拨单")
     items = session.exec(select(StockTransferItem).where(StockTransferItem.transfer_id == batch.id)).all()
+    lock_skus(session, [item.sku_id for item in items])
     for item in items:
         _adjust_stock(session, item.sku_id, batch.from_store, item.qty)
         session.add(StockLog(
@@ -853,7 +859,8 @@ def create_inventory_count(
     )
     session.add(count)
     session.flush()
-    for sku in session.exec(select(Sku).order_by(Sku.id)).all():
+    for sku in session.exec(select(Sku).where(Sku.archived_at.is_(None)).order_by(Sku.id)
+                            .with_for_update().execution_options(populate_existing=True)).all():
         inv = _ensure_inventory(session, sku.id, store)
         session.add(InventoryCountItem(
             count_id=count.id, sku_id=sku.id, system_qty=inv.quantity,
@@ -964,6 +971,7 @@ def complete_inventory_count(
         actuals = {row.item_id: row.actual_qty for row in data.items}
         if len(actuals) != len(data.items) or set(actuals) != {item.id for item in items}:
             raise HTTPException(400, "请提交盘点单的全部明细，不能遗漏、重复或包含其他单据的明细")
+        lock_skus(session, [item.sku_id for item in items])
         conflicts = []
         for item in items:
             inv = session.exec(
@@ -1087,7 +1095,7 @@ def create_sale(
             raise HTTPException(400, "每件商品需提供 sku_id 或 barcode")
         if not sku:
             raise HTTPException(404, f"找不到商品：{item.sku_id or item.barcode}")
-        if not sku.active and not existing:
+        if (not sku.active or sku.archived_at is not None) and not existing:
             raise HTTPException(400, f"{sku.barcode} 已停用，不能销售")
         if sku.id not in merged:
             product = session.get(Product, sku.product_id)
@@ -1116,6 +1124,10 @@ def create_sale(
         return _existing_sale_result(session, existing)
 
     # 2) 逐件原子扣减，任一不足整单回滚
+    locked = lock_skus(session, order_seq, require_active=True)
+    for sku in locked:
+        merged[sku.id]["sku"] = sku
+        merged[sku.id]["unit_cents"] = round(sku.price * 100)
     for sid in sorted(order_seq):
         row = merged[sid]
         if _adjust_stock(session, sid, store, -row["qty"]) != 1:

@@ -5,13 +5,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from database import DEFAULT_STORES, get_session
-from models import Inventory, Product, SalesOrderItem, Sku, StockLog, User
+from models import Inventory, Product, Sku, StockLog, User
 from schemas import ProductCreate, ProductUpdate, ProductLabelUpdate, ProductIntake, validate_money
 from label_standards import LABEL_FIELDS, label_configuration, label_issues, normalize_category, normalize_standard, standards_catalog
 from security import require_manager
 from audit import add_audit_event
 from management_operations import begin_operation, finish_operation
 from routers.skus import _next_unique_barcode
+from sku_lifecycle import lifecycle_status
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
@@ -217,29 +218,28 @@ def update_product(
 @router.delete("/{product_id}")
 def delete_product(product_id: int, manager: User = Depends(require_manager),
                    session: Session = Depends(get_session)):
-    product = session.get(Product, product_id)
-    if not product:
-        raise HTTPException(404, "商品不存在")
-    # 收银/库存系统必须保留历史流水。已有库存变动或销售记录时，不做物理删除。
-    skus = session.exec(select(Sku).where(Sku.product_id == product_id)).all()
-    for sku in skus:
-        has_logs = session.exec(select(StockLog.id).where(StockLog.sku_id == sku.id)).first()
-        has_sales = session.exec(select(SalesOrderItem.id).where(SalesOrderItem.sku_id == sku.id)).first()
-        inventory_rows = session.exec(select(Inventory).where(Inventory.sku_id == sku.id)).all()
-        total_quantity = sum(inv.quantity for inv in inventory_rows)
-        if total_quantity != 0 or has_logs or has_sales:
-            raise HTTPException(
-                400,
-                "该款式已有库存或销售历史，不能直接删除；请保留历史账目，必要时改名为停用/下架。",
-            )
-        for inv in inventory_rows:
-            session.delete(inv)
-        session.delete(sku)
-    add_audit_event(
-        session, action="product.delete", entity_type="product",
-        entity_id=product.id, actor=manager,
-        before={"code": product.code, "name": product.name},
-    )
-    session.delete(product)
-    session.commit()
-    return {"ok": True}
+    try:
+        product = session.exec(select(Product).where(Product.id == product_id).with_for_update()).first()
+        if not product:
+            raise HTTPException(404, "商品不存在")
+        skus = session.exec(select(Sku).where(Sku.product_id == product_id).order_by(Sku.id)
+                            .with_for_update().execution_options(populate_existing=True)).all()
+        for sku in skus:
+            status = lifecycle_status(session, sku, lock_inventory=True)
+            if not status["can_delete"]:
+                raise HTTPException(400, f"{sku.barcode}：" + "；".join(status["delete_reasons"]))
+        for sku in skus:
+            for inv in session.exec(select(Inventory).where(Inventory.sku_id == sku.id)).all():
+                session.delete(inv)
+            session.delete(sku)
+        add_audit_event(session, action="product.delete", entity_type="product", entity_id=product.id,
+                        actor=manager, before={"code": product.code, "name": product.name})
+        session.delete(product)
+        session.commit()
+        return {"ok": True}
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(409, "该款式已有新的单据引用，请重新加载核对，历史记录不会删除")
+    except Exception:
+        session.rollback()
+        raise
